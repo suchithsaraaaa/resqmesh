@@ -1,42 +1,72 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "ResQMeshEventHeader",
+  "title": "ResQMeshEvent",
+  "description": "Standard idempotent event packet for distributed peer-to-peer synchronization",
   "type": "object",
-  "required": ["uuid", "eventType", "createdAt", "deviceId", "deviceClock"],
+  "required": [
+    "event_id",
+    "event_type",
+    "origin_node_id",
+    "timestamp",
+    "device_clock",
+    "version",
+    "payload"
+  ],
   "properties": {
-    "uuid": {
+    "event_id": {
       "type": "string",
       "format": "uuid",
-      "description": "Globally unique identifier for the event record"
+      "description": "Globally unique identifier for the event record used for duplicate suppression"
     },
-    "eventType": {
+    "event_type": {
       "type": "string",
       "enum": [
-        "incident_created",
-        "chat_message",
-        "status_update",
-        "resource_request",
-        "sync_ack",
-        "ai_analysis"
-      ]
+        "incident.created",
+        "incident.updated",
+        "report.created",
+        "message.created",
+        "resource.updated",
+        "node.joined",
+        "node.left",
+        "sync.vector"
+      ],
+      "description": "Domain type of the disaster response event"
     },
-    "createdAt": {
+    "origin_node_id": {
       "type": "string",
-      "format": "date-time",
-      "description": "ISO-8601 UTC timestamp of creation"
+      "description": "Unique cryptographic identifier of the originating peer node"
     },
-    "deviceId": {
-      "type": "string",
-      "description": "Unique identifier / public key hash of the originating device"
+    "timestamp": {
+      "type": "number",
+      "description": "Epoch timestamp (seconds.microseconds) of event creation"
     },
-    "deviceClock": {
+    "device_clock": {
       "type": "integer",
       "minimum": 0,
-      "description": "Monotonic counter for logical clock synchronization"
+      "description": "Monotonic logical clock counter for Last-Writer-Wins consensus"
+    },
+    "version": {
+      "type": "integer",
+      "default": 1,
+      "description": "Event schema version"
+    },
+    "hop_count": {
+      "type": "integer",
+      "default": 0,
+      "description": "Current number of hops traversed across the mesh"
+    },
+    "ttl": {
+      "type": "integer",
+      "default": 5,
+      "description": "Time-To-Live maximum hops before dropping"
+    },
+    "signature": {
+      "type": ["string", "null"],
+      "description": "Ed25519 digital signature of origin node"
     },
     "payload": {
       "type": "object",
-      "description": "Event-specific data body"
+      "description": "Event-specific operational data payload"
     }
   }
 }

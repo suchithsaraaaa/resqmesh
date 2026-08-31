@@ -11,9 +11,11 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 try:
     from backend.app.main import app
     from backend.app.database import Base, get_db
+    import backend.app.models
 except ImportError:
     from app.main import app
     from app.database import Base, get_db
+    import app.models
 
 from sqlalchemy.pool import StaticPool
 
@@ -23,6 +25,7 @@ engine = create_engine(
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
+Base.metadata.create_all(bind=engine)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

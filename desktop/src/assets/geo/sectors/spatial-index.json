@@ -1,0 +1,226 @@
+[
+  {
+    "id": "delhi",
+    "name": "Delhi NCR Sector",
+    "center": [
+      77.209,
+      28.6139
+    ],
+    "bbox": [
+      76.859,
+      28.2639,
+      77.559,
+      28.9639
+    ],
+    "file": "delhi-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "mumbai",
+    "name": "Mumbai MMR Sector",
+    "center": [
+      72.8777,
+      19.076
+    ],
+    "bbox": [
+      72.5777,
+      18.776,
+      73.1777,
+      19.376
+    ],
+    "file": "mumbai-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "bengaluru",
+    "name": "Bengaluru Urban Sector",
+    "center": [
+      77.5946,
+      12.9716
+    ],
+    "bbox": [
+      77.3146,
+      12.6916,
+      77.8746,
+      13.2516
+    ],
+    "file": "bengaluru-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "chennai",
+    "name": "Chennai Metro Sector",
+    "center": [
+      80.2707,
+      13.0827
+    ],
+    "bbox": [
+      80.0207,
+      12.8327,
+      80.5207,
+      13.3327
+    ],
+    "file": "chennai-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "kolkata",
+    "name": "Kolkata Greater Sector",
+    "center": [
+      88.3639,
+      22.5726
+    ],
+    "bbox": [
+      88.1139,
+      22.3226,
+      88.6139,
+      22.8226
+    ],
+    "file": "kolkata-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "ahmedabad",
+    "name": "Ahmedabad-Gandhinagar Sector",
+    "center": [
+      72.5714,
+      23.0225
+    ],
+    "bbox": [
+      72.3214,
+      22.7725,
+      72.8214,
+      23.2725
+    ],
+    "file": "ahmedabad-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "pune",
+    "name": "Pune Metropolitan Sector",
+    "center": [
+      73.8567,
+      18.5204
+    ],
+    "bbox": [
+      73.6067,
+      18.2704,
+      74.1067,
+      18.7704
+    ],
+    "file": "pune-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "jaipur",
+    "name": "Jaipur Sector",
+    "center": [
+      75.7873,
+      26.9124
+    ],
+    "bbox": [
+      75.5673,
+      26.6924,
+      76.0073,
+      27.1324
+    ],
+    "file": "jaipur-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "lucknow",
+    "name": "Lucknow-Kanpur Sector",
+    "center": [
+      80.9462,
+      26.8467
+    ],
+    "bbox": [
+      80.7262,
+      26.6267,
+      81.1662,
+      27.0667
+    ],
+    "file": "lucknow-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "kochi",
+    "name": "Kochi Greater Sector",
+    "center": [
+      76.2673,
+      9.9312
+    ],
+    "bbox": [
+      76.0673,
+      9.7312,
+      76.4673,
+      10.1312
+    ],
+    "file": "kochi-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "guwahati",
+    "name": "Guwahati Strategic Sector",
+    "center": [
+      91.7362,
+      26.1445
+    ],
+    "bbox": [
+      91.5362,
+      25.9445,
+      91.9362,
+      26.3445
+    ],
+    "file": "guwahati-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "bhopal",
+    "name": "Bhopal Central Sector",
+    "center": [
+      77.4126,
+      23.2599
+    ],
+    "bbox": [
+      77.2126,
+      23.0599,
+      77.6126,
+      23.4599
+    ],
+    "file": "bhopal-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "patna",
+    "name": "Patna Strategic Sector",
+    "center": [
+      85.1376,
+      25.5941
+    ],
+    "bbox": [
+      84.9376,
+      25.3941,
+      85.3376,
+      25.7941
+    ],
+    "file": "patna-roads.json",
+    "featureCount": 24
+  },
+  {
+    "id": "hyderabad",
+    "name": "Hyderabad High-Detail Sector (69,634 segments)",
+    "center": [
+      78.4867,
+      17.385
+    ],
+    "bbox": [
+      78.2,
+      17.2,
+      78.7,
+      17.6
+    ],
+    "file": "hyderabad-roads.json",
+    "featureCount": 69634
+  }
+]

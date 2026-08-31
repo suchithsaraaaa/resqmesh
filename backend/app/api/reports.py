@@ -11,12 +11,21 @@ except ImportError:
     from app.models import Report, OperationalIncident
     from app.schemas import ReportCreate, ReportResponse
 
+try:
+    from backend.app.services.incident_matcher import IncidentMatcherService
+    from backend.app.network.event_protocol import EventProtocolEngine
+    from backend.app.sync.outbox_worker import StoreAndForwardWorker
+except ImportError:
+    from app.services.incident_matcher import IncidentMatcherService
+    from app.network.event_protocol import EventProtocolEngine
+    from app.sync.outbox_worker import StoreAndForwardWorker
+
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
 
 @router.post("/", response_model=ReportResponse, status_code=status.HTTP_201_CREATED)
 def create_report(report_in: ReportCreate, db: Session = Depends(get_db)):
-    """Create a new responder field report."""
+    """Create a new responder field report and broadcast across mesh."""
     if report_in.incident_id:
         incident = db.query(OperationalIncident).filter(
             OperationalIncident.incident_id == report_in.incident_id
@@ -31,6 +40,34 @@ def create_report(report_in: ReportCreate, db: Session = Depends(get_db)):
     db.add(report)
     db.commit()
     db.refresh(report)
+
+    # Emit signed event into mesh outbox
+    try:
+        EventProtocolEngine.emit_event(
+            db=db,
+            event_type="report.created",
+            payload={
+                "report_id": report.report_id,
+                "incident_id": report.incident_id,
+                "device_id": report.device_id,
+                "user_id": report.user_id,
+                "category": report.category,
+                "description": report.description,
+                "latitude": report.latitude,
+                "longitude": report.longitude,
+            },
+        )
+        StoreAndForwardWorker.get_instance().trigger_flush()
+    except Exception as e:
+        print(f"[Warning] Failed to emit report.created: {e}")
+
+    # If no incident_id assigned, run AI incident correlation engine
+    if not report.incident_id:
+        try:
+            IncidentMatcherService(db).process_new_report(report)
+        except Exception:
+            pass
+
     return report
 
 

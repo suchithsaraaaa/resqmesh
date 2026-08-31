@@ -367,4 +367,13 @@ no unnecessary code exists
 
 Only then proceed to the next phase.
 
+Release Sequence Rule
+
+Always strictly follow the sequential versioning convention:
+- Inspect D:\Final_year_project\release before any installer build.
+- Find the highest existing version number (e.g. v1.0.9).
+- The next release must always increment to the next sequential version (e.g. v1.0.10).
+- Never reuse or overwrite an existing release version number.
+- Always keep desktop/package.json, docs/RELEASES.md, and installer artifact names strictly synchronized.
+
 Project Context: We are building ResQMesh AI, an offline-first emergency response platform using React Native, a Python backend, SQLite, peer-to-peer mesh networking (Bluetooth, Wi-Fi Direct, LAN), a local desktop command center, and an on-device AI pipeline with RAG. The architecture, goals, and technology stack are defined in the project specification and must remain consistent throughout development.

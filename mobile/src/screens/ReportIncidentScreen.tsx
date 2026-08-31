@@ -28,6 +28,19 @@ const SEVERITIES: Array<{label: string; value: string; color: string}> = [
   {label: 'Critical', value: 'critical', color: '#9C27B0'},
 ];
 
+const MOBILE_LANDMARKS = [
+  {id: 'majestic', name: 'Majestic Transit Hub', lat: 12.9767, lng: 77.5713},
+  {id: 'mg_road', name: 'MG Road Metro', lat: 12.9756, lng: 77.6066},
+  {id: 'koramangala', name: 'Koramangala 5th Block', lat: 12.9352, lng: 77.6245},
+  {id: 'indiranagar', name: 'Indiranagar 100ft Rd', lat: 12.9784, lng: 77.6408},
+  {id: 'whitefield', name: 'Whitefield ITPL', lat: 12.9863, lng: 77.7302},
+  {id: 'hebbal', name: 'Hebbal Flyover', lat: 13.0358, lng: 77.5970},
+  {id: 'elec_city', name: 'Electronic City Toll', lat: 12.8452, lng: 77.6602},
+  {id: 'sector_4', name: 'Sector 4 Warehouse', lat: 12.9716, lng: 77.5946},
+  {id: 'hospital', name: 'City Civil Hospital', lat: 12.9650, lng: 77.5880},
+  {id: 'custom', name: 'Other / Custom Landmark', lat: 12.9716, lng: 77.5946},
+];
+
 interface Props {
   navigation: any;
 }
@@ -36,9 +49,20 @@ export default function ReportIncidentScreen({navigation}: Props) {
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState('general');
   const [severity, setSeverity] = useState('medium');
-  const [latitude, setLatitude] = useState('');
-  const [longitude, setLongitude] = useState('');
+  const [selectedLandmark, setSelectedLandmark] = useState('majestic');
+  const [landmarkDetail, setLandmarkDetail] = useState('');
+  const [latitude, setLatitude] = useState('12.9767');
+  const [longitude, setLongitude] = useState('77.5713');
   const [loading, setLoading] = useState(false);
+
+  const handleLandmarkSelect = (id: string) => {
+    setSelectedLandmark(id);
+    const lm = MOBILE_LANDMARKS.find(l => l.id === id);
+    if (lm && id !== 'custom') {
+      setLatitude(String(lm.lat));
+      setLongitude(String(lm.lng));
+    }
+  };
 
   const handleSubmit = async () => {
     if (!description.trim()) {
@@ -154,9 +178,38 @@ export default function ReportIncidentScreen({navigation}: Props) {
         </View>
       </View>
 
-      {/* GPS */}
+      {/* Locality & Landmarks */}
       <View style={styles.card}>
-        <Text style={styles.label}>GPS Coordinates (optional)</Text>
+        <Text style={styles.label}>📍 Locality / Landmark Sector</Text>
+        <View style={styles.chipRow}>
+          {MOBILE_LANDMARKS.map(lm => (
+            <TouchableOpacity
+              key={lm.id}
+              style={[styles.chip, selectedLandmark === lm.id && styles.chipActive]}
+              onPress={() => handleLandmarkSelect(lm.id)}>
+              <Text
+                style={[
+                  styles.chipText,
+                  selectedLandmark === lm.id && styles.chipTextActive,
+                ]}>
+                {lm.name}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        <TextInput
+          style={[styles.input, {marginTop: 10}]}
+          placeholder="Specific landmark / street details (e.g. Near Gate 2)"
+          placeholderTextColor="#5C6B7A"
+          value={landmarkDetail}
+          onChangeText={setLandmarkDetail}
+        />
+      </View>
+
+      {/* GPS (Optional / Advanced) */}
+      <View style={styles.card}>
+        <Text style={styles.label}>GPS Coordinates (Auto-filled from landmark)</Text>
         <View style={styles.gpsRow}>
           <TextInput
             style={[styles.input, styles.gpsInput]}

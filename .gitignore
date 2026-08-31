@@ -42,6 +42,7 @@ ios/Pods/
 ios/build/
 desktop/dist/
 desktop/out/
+release/
 
 # SQLite databases & local data
 *.db
