@@ -500,7 +500,18 @@ export const App: React.FC = () => {
       setNodeRole(data.role);
       setIsConfigured(true);
       setShowConfigModal(false);
-      localStorage.setItem('resqmesh_offline_node', JSON.stringify({ name: data.name, role: data.role }));
+      // Publish real MESH_INITIALIZED activity event to TacticalEventBus
+      const peerCount = peers.length;
+      TacticalEventBus.publish({
+        type: 'MESH_INITIALIZED',
+        severity: 'SUCCESS',
+        nodeId: data.node_id,
+        actor: data.name || 'Commander',
+        title: '🕸 Mesh Initialized',
+        description: `Commander node "${data.name}" initialized the emergency mesh.\nStatus: ${peerCount > 0 ? `${peerCount} peers connected` : 'Standalone — 0 peers'}`,
+        metadata: { role: data.role, peers: peerCount, api_port: data.api_port || 8000 },
+      });
+
       fetchMeshStatus();
       fetchPeers();
     } catch (err: any) {
@@ -518,24 +529,68 @@ export const App: React.FC = () => {
     setMeshState('OFFLINE');
     localStorage.setItem('resqmesh_offline_node', JSON.stringify({ name, role }));
     TacticalEventBus.publish({
-      type: 'MESH_STANDALONE_INIT',
-      severity: 'INFO',
-      title: 'Command Center Initialized in Offline Standalone Mode',
-      description: `Laptop operating locally as ${role === 'commander' ? 'Commander' : 'Field Responder'} "${name}". Mesh standby for nearby peers.`,
+      type: 'MESH_INITIALIZED',
+      severity: 'SUCCESS',
+      nodeId: nodeId || 'Local-Commander',
+      actor: name || 'Commander',
+      title: '🕸 Mesh Initialized',
+      description: `Commander node "${name}" initialized the emergency mesh in standalone mode.\nStatus: Standalone — 0 peers`,
+      metadata: { role, peers: 0, offline: true },
     });
   };
 
   // Trigger Force Sync
   const handleTriggerSync = async () => {
-    await fetch(`${getApiUrl()}/sync/vector`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vector: {} }),
-    });
-    fetchSyncMetrics();
-    fetchClusters();
-    fetchIncidents();
-    fetchResources();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(`${getApiUrl()}/node/sync/force`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Server returned error (${res.status})`);
+      }
+      const syncResult = await res.json();
+
+      // Refresh all dependent states
+      await Promise.all([
+        fetchSyncMetrics(),
+        fetchClusters(),
+        fetchIncidents(),
+        fetchResources(),
+        fetchEventsFeed(),
+        fetchPeers(),
+        fetchMeshStatus(),
+      ]);
+
+      // Publish MESH_DELTA_SYNC_COMPLETED event to TacticalEventBus
+      const appliedCount = syncResult.applied_changes || 0;
+      const peerCount = syncResult.peer_count || peers.length;
+      TacticalEventBus.publish({
+        type: 'MESH_DELTA_SYNC_COMPLETED',
+        severity: 'SUCCESS',
+        nodeId: nodeId || syncResult.node_id || 'Commander',
+        actor: nodeName || syncResult.node_name || 'Commander',
+        title: '✓ Delta Sync Completed',
+        description: `Delta synchronization completed for ${nodeName || 'Command-Center'}.\n${appliedCount} change(s) applied • ${peerCount} peer(s) active • Mesh topology refreshed.`,
+        metadata: {
+          applied_changes: appliedCount,
+          peer_count: peerCount,
+          delivered_outbox: syncResult.delivered_outbox || 0,
+          timestamp: syncResult.timestamp || Date.now() / 1000,
+        },
+      });
+
+      return syncResult;
+    } catch (err: any) {
+      clearTimeout(timeout);
+      const msg = err.name === 'AbortError' ? 'Delta sync timed out after 8 seconds.' : (err.message || 'Delta synchronization failed.');
+      throw new Error(msg);
+    }
   };
 
   // Manual Direct Peer Connection
@@ -1366,6 +1421,8 @@ export const App: React.FC = () => {
         onTriggerSync={handleTriggerSync}
         onConnectPeer={handleConnectPeer}
         apiUrl={getApiUrl()}
+        nodeName={nodeName}
+        nodeRole={nodeRole}
       />
 
       {/* Broadcast Incident Modal */}

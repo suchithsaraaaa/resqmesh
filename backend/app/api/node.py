@@ -413,20 +413,20 @@ def get_pending_outbox_items(db: Session = Depends(get_db)):
     return db.query(OutboxItem).filter_by(status="pending").all()
 
 
-# --- Distributed Delta Sync & Vector Consensus ---
 @router.post("/sync/vector", status_code=status.HTTP_200_OK)
 def handle_vector_sync(sync_in: dict, db: Session = Depends(get_db)):
     """
     Receive peer's version vector, return missing event delta in chronological order,
     and execute 2-way handshake acknowledging verified events in outbox.
     """
+    nm = NodeManager.get_instance()
     remote_vector = sync_in.get("vector", {})
     sender_node_id = sync_in.get("sender_node_id")
     missing_events = DeltaSyncEngine.calculate_missing_events(db, remote_vector)
 
     # 2-WAY HANDSHAKE: If peer vector confirms it has our events, mark local outbox as acknowledged
-    if remote_vector and node_manager.node_id in remote_vector:
-        last_ts = remote_vector[node_manager.node_id].get("last_timestamp", 0.0)
+    if remote_vector and nm.node_id in remote_vector:
+        last_ts = remote_vector[nm.node_id].get("last_timestamp", 0.0)
         if last_ts > 0:
             pending_items = db.query(OutboxItem).filter_by(status="pending").all()
             for item in pending_items:
@@ -436,7 +436,7 @@ def handle_vector_sync(sync_in: dict, db: Session = Depends(get_db)):
             db.commit()
 
     return {
-        "node_id": node_manager.node_id,
+        "node_id": nm.node_id,
         "missing_events": missing_events,
         "local_vector": DeltaSyncEngine.get_local_vector(db),
         "timestamp": time.time(),
@@ -502,10 +502,96 @@ def get_mesh_routes():
 @router.get("/node/topology")
 def get_mesh_topology():
     """Return visual multi-hop graph topology representation of nodes, links, and relay hops."""
+    nm = NodeManager.get_instance()
     try:
         from backend.app.network.router import ResQMeshRouter
     except ImportError:
         from app.network.router import ResQMeshRouter
-    router = ResQMeshRouter.get_instance(node_manager.node_id)
+    router = ResQMeshRouter.get_instance(nm.node_id)
     return router.get_topology()
+
+
+@router.post("/node/sync/force", status_code=status.HTTP_200_OK)
+@router.post("/sync/force", status_code=status.HTTP_200_OK)
+def force_delta_sync_now(db: Session = Depends(get_db)):
+    """
+    Force immediate bidirectional delta vector synchronization with all active peers.
+    Sweeps outbox, computes missing events, applies remote deltas, updates routes,
+    and returns comprehensive sync statistics and refreshed topology.
+    """
+    nm = NodeManager.get_instance()
+    active_peers = nm.get_active_peers()
+    local_node_id = nm.node_id
+
+    # 1. Sweep and flush pending outbox items
+    try:
+        from backend.app.sync.outbox_worker import StoreAndForwardWorker
+    except ImportError:
+        from app.sync.outbox_worker import StoreAndForwardWorker
+    delivered_outbox = StoreAndForwardWorker.get_instance().flush_outbox(db)
+
+    # 2. Synchronize delta vectors with each active peer
+    try:
+        from backend.app.sync.delta_sync import DeltaSyncEngine
+    except ImportError:
+        from app.sync.delta_sync import DeltaSyncEngine
+
+    applied_changes = 0
+    duplicate_changes = 0
+    synced_peers = []
+    failed_peers = []
+
+    for peer in active_peers:
+        peer_ip = peer.get("ip_address")
+        peer_port = peer.get("api_port", 8000)
+        peer_id = peer.get("node_id", "unknown")
+        if peer_ip:
+            url = f"http://{peer_ip}:{peer_port}"
+            res = DeltaSyncEngine.sync_with_peer_url(url, db, local_node_id)
+            if res.get("status") != "failed":
+                applied_changes += res.get("applied", 0)
+                duplicate_changes += res.get("duplicates", 0)
+                synced_peers.append(peer_id)
+            else:
+                failed_peers.append(peer_id)
+
+    # 3. Recalculate routes and refreshed topology
+    try:
+        from backend.app.network.router import ResQMeshRouter
+    except ImportError:
+        from app.network.router import ResQMeshRouter
+    router = ResQMeshRouter.get_instance(local_node_id)
+    for p in active_peers:
+        pid = p.get("node_id")
+        if pid:
+            router.update_route(
+                dest_id=pid,
+                next_hop_id=pid,
+                hop_count=1,
+                latency_ms=float(p.get("latency_ms", 12.0) or 12.0),
+                relay_path=[pid],
+            )
+
+    topology = router.get_topology()
+    routes = router.get_routes()
+
+    return {
+        "success": True,
+        "node_id": local_node_id,
+        "node_name": nm.node_name or "Commander",
+        "peer_count": len(active_peers),
+        "synced_peer_count": len(synced_peers),
+        "synced_peers": synced_peers,
+        "failed_peers": failed_peers,
+        "applied_changes": applied_changes,
+        "duplicate_changes": duplicate_changes,
+        "delivered_outbox": delivered_outbox,
+        "timestamp": time.time(),
+        "topology": topology,
+        "routes": routes,
+        "message": f"Delta synchronization completed with {len(synced_peers)} peer(s). {applied_changes} change(s) applied."
+        if active_peers
+        else "Delta synchronization completed in standalone mode (0 peers reachable). Mesh topology refreshed.",
+    }
+
 

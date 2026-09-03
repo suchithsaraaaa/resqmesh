@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 export interface PeerNode {
   node_id: string;
@@ -42,13 +42,22 @@ export interface MeshRouteItem {
   age_seconds: number;
 }
 
+export interface SyncNotification {
+  type: 'success' | 'error';
+  title: string;
+  message: string;
+  details?: string;
+}
+
 interface PeerTopologyModalProps {
   isOpen: boolean;
   onClose: () => void;
   peers: PeerNode[];
-  onTriggerSync: () => Promise<void>;
+  onTriggerSync: () => Promise<any>;
   onConnectPeer?: (address: string) => Promise<void>;
   apiUrl?: string;
+  nodeName?: string;
+  nodeRole?: string;
 }
 
 export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
@@ -58,13 +67,17 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
   onTriggerSync,
   onConnectPeer,
   apiUrl = 'http://127.0.0.1:8000',
+  nodeName = 'Local Commander',
+  nodeRole = 'commander',
 }) => {
   const [activeTab, setActiveTab] = useState<'visual' | 'peers' | 'routes'>('visual');
   const [syncing, setSyncing] = useState(false);
-  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [syncNotification, setSyncNotification] = useState<SyncNotification | null>(null);
   const [manualIp, setManualIp] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+
+  const autoDismissTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Live topology and routing data from backend
   const [topology, setTopology] = useState<{
@@ -85,7 +98,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
         setTopology(data);
       }
     } catch {
-      // fallback to peers if server route not reachable
+      // Fallback to peers if server route unreachable
     }
   };
 
@@ -97,46 +110,91 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
     }
   }, [isOpen, apiUrl]);
 
+  useEffect(() => {
+    return () => {
+      if (autoDismissTimerRef.current) {
+        clearTimeout(autoDismissTimerRef.current);
+      }
+    };
+  }, []);
+
   if (!isOpen) return null;
 
   const handleSync = async () => {
+    if (syncing) return; // Concurrency protection against double-click
     setSyncing(true);
-    setSyncMessage(null);
+    setSyncNotification(null);
+
     try {
-      await onTriggerSync();
+      const result = await onTriggerSync();
       await fetchTopology();
-      setSyncMessage('Synchronized delta vectors with all peers successfully.');
+
+      const changeCount = result?.applied_changes ?? 0;
+      const peerCount = result?.peer_count ?? (topology?.direct_peer_count ?? peers.length);
+
+      setSyncNotification({
+        type: 'success',
+        title: 'Operation Completed Successfully',
+        message: 'Delta synchronization completed. Mesh topology and routing information updated.',
+        details: `${changeCount} change(s) applied • ${peerCount} peer(s) active in mesh • Topology refreshed`,
+      });
+
+      if (autoDismissTimerRef.current) clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = setTimeout(() => {
+        setSyncNotification(null);
+      }, 4000);
     } catch (err: any) {
-      setSyncMessage(`Sync failed: ${err.message}`);
+      setSyncNotification({
+        type: 'error',
+        title: 'Delta Sync Failed',
+        message: err.message || 'Unable to synchronize with mesh peers.',
+      });
+
+      if (autoDismissTimerRef.current) clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = setTimeout(() => {
+        setSyncNotification(null);
+      }, 6000);
     } finally {
       setSyncing(false);
     }
   };
 
   const handleConnectManual = async () => {
-    if (!manualIp.trim() || !onConnectPeer) return;
+    if (!manualIp.trim() || !onConnectPeer || connecting) return;
     setConnecting(true);
-    setSyncMessage(null);
+    setSyncNotification(null);
     try {
       await onConnectPeer(manualIp.trim());
       await fetchTopology();
-      setSyncMessage(`Connected to peer at ${manualIp.trim()} successfully!`);
+      setSyncNotification({
+        type: 'success',
+        title: 'Operation Completed Successfully',
+        message: `Connected to peer at ${manualIp.trim()} successfully!`,
+      });
+      if (autoDismissTimerRef.current) clearTimeout(autoDismissTimerRef.current);
+      autoDismissTimerRef.current = setTimeout(() => {
+        setSyncNotification(null);
+      }, 4000);
       setManualIp('');
     } catch (err: any) {
-      setSyncMessage(`Connection failed: ${err.message}`);
+      setSyncNotification({
+        type: 'error',
+        title: 'Connection Failed',
+        message: err.message || 'Could not connect to manual peer address.',
+      });
     } finally {
       setConnecting(false);
     }
   };
 
-  // Combine direct peers and topology nodes
+  // Combine direct peers and topology nodes dynamically
   const displayNodes: MeshTopologyNode[] = topology?.nodes && topology.nodes.length > 0
     ? topology.nodes
     : [
         {
           id: 'local-node',
-          name: 'Local Commander',
-          role: 'commander',
+          name: nodeName || 'Local Commander',
+          role: nodeRole || 'commander',
           is_local: true,
           hop_count: 0,
           status: 'online',
@@ -164,9 +222,24 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
         direct: true,
       }));
 
+  const displayRoutes: MeshRouteItem[] = topology?.routes ?? peers.map((p) => ({
+    dest_id: p.node_id,
+    next_hop_id: p.node_id,
+    hop_count: 1,
+    latency_ms: p.latency_ms || 12.0,
+    relay_path: [p.node_id],
+    link_quality: 'EXCELLENT',
+    last_updated: Date.now() / 1000,
+    age_seconds: 2,
+  }));
+
   const localNode = displayNodes.find((n) => n.is_local) || displayNodes[0];
   const directPeers = displayNodes.filter((n) => !n.is_local && n.hop_count === 1);
   const relayedNodes = displayNodes.filter((n) => !n.is_local && n.hop_count > 1);
+
+  const totalNodesCount = topology?.total_nodes ?? displayNodes.length;
+  const directPeersCount = topology?.direct_peer_count ?? directPeers.length;
+  const relayedCount = topology?.relayed_node_count ?? relayedNodes.length;
 
   // Visual layout geometry for SVG graph
   const svgWidth = 620;
@@ -178,7 +251,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
   const nodePositions: Record<string, { x: number; y: number }> = {};
   nodePositions[localNode.id] = { x: centerX, y: centerY };
 
-  // Arrange direct peers on inner circle (radius 95)
+  // Arrange direct peers on inner circle (radius 110/90)
   directPeers.forEach((p, idx) => {
     const total = directPeers.length || 1;
     const angle = (idx / total) * 2 * Math.PI - Math.PI / 2;
@@ -188,7 +261,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
     };
   });
 
-  // Arrange relayed nodes on outer circle (radius 180)
+  // Arrange relayed nodes on outer circle (radius 210/115)
   relayedNodes.forEach((p, idx) => {
     const total = relayedNodes.length || 1;
     const angle = (idx / total) * 2 * Math.PI - Math.PI / 4;
@@ -220,13 +293,14 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
           background: '#0f172a',
           border: '1px solid #334155',
           borderRadius: '12px',
-          width: '680px',
-          maxWidth: '92vw',
-          maxHeight: '85vh',
+          width: '720px',
+          maxWidth: '94vw',
+          maxHeight: '88vh',
           display: 'flex',
           flexDirection: 'column',
           boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.7)',
           overflow: 'hidden',
+          position: 'relative',
         }}
       >
         {/* Header */}
@@ -243,7 +317,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <span style={{ fontSize: '1.4rem' }}>🌐</span>
             <div>
-              <h3 style={{ margin: 0, color: '#38bdf8', fontSize: '1.15rem' }}>
+              <h3 style={{ margin: 0, color: '#38bdf8', fontSize: '1.15rem', fontWeight: 700 }}>
                 Multi-Hop Peer Mesh Topology & Route Visualizer
               </h3>
               <p style={{ margin: 0, color: '#94a3b8', fontSize: '0.78rem' }}>
@@ -259,6 +333,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
               color: '#94a3b8',
               fontSize: '1.2rem',
               cursor: 'pointer',
+              padding: '4px 8px',
             }}
           >
             ✕
@@ -281,24 +356,35 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ color: '#94a3b8' }}>Total Nodes:</span>
             <strong style={{ color: '#f8fafc', background: '#334155', padding: '2px 8px', borderRadius: '10px' }}>
-              {displayNodes.length}
+              {totalNodesCount}
             </strong>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ color: '#94a3b8' }}>Direct 1-Hop:</span>
             <strong style={{ color: '#34d399', background: 'rgba(16, 185, 129, 0.15)', padding: '2px 8px', borderRadius: '10px' }}>
-              {directPeers.length}
+              {directPeersCount}
             </strong>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ color: '#94a3b8' }}>Multi-Hop Relays:</span>
             <strong style={{ color: '#38bdf8', background: 'rgba(56, 189, 248, 0.15)', padding: '2px 8px', borderRadius: '10px' }}>
-              {relayedNodes.length}
+              {relayedCount}
             </strong>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto' }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
-            <span style={{ color: '#10b981', fontWeight: '700' }}>Active Mesh Routing</span>
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: totalNodesCount > 1 ? '#10b981' : '#38bdf8',
+                display: 'inline-block',
+                boxShadow: totalNodesCount > 1 ? '0 0 8px #10b981' : 'none',
+              }}
+            />
+            <span style={{ color: totalNodesCount > 1 ? '#10b981' : '#38bdf8', fontWeight: '700' }}>
+              {totalNodesCount > 1 ? 'Active Mesh Routing' : 'Standalone Mesh'}
+            </span>
           </div>
         </div>
 
@@ -306,8 +392,8 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
         <div style={{ display: 'flex', background: '#0a0f1d', borderBottom: '1px solid #1e293b', padding: '0 24px' }}>
           {[
             { id: 'visual', label: '🌐 Mesh Topology & Relays' },
-            { id: 'peers', label: `📋 Direct Peers (${directPeers.length})` },
-            { id: 'routes', label: `🗺️ Routing Table (${topology?.routes?.length || directPeers.length})` },
+            { id: 'peers', label: `📋 Direct Peers (${directPeersCount})` },
+            { id: 'routes', label: `🗺️ Routing Table (${displayRoutes.length})` },
           ].map((tab) => (
             <button
               key={tab.id}
@@ -329,20 +415,79 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
         </div>
 
         {/* Modal Body */}
-        <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
-          {syncMessage && (
+        <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '14px' }}>
+          {/* Temporary Success / Failure Notification Popup */}
+          {syncNotification && (
             <div
               style={{
-                background: syncMessage.includes('failed') ? 'rgba(239, 68, 68, 0.15)' : 'rgba(16, 185, 129, 0.15)',
-                border: `1px solid ${syncMessage.includes('failed') ? '#ef4444' : '#10b981'}`,
-                color: syncMessage.includes('failed') ? '#fca5a5' : '#6ee7b7',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                fontSize: '0.80rem',
-                marginBottom: '14px',
+                background: syncNotification.type === 'success'
+                  ? 'linear-gradient(135deg, rgba(6, 78, 59, 0.95), rgba(15, 23, 42, 0.95))'
+                  : 'linear-gradient(135deg, rgba(127, 29, 29, 0.95), rgba(15, 23, 42, 0.95))',
+                border: `1px solid ${syncNotification.type === 'success' ? '#10b981' : '#ef4444'}`,
+                borderRadius: '8px',
+                padding: '12px 16px',
+                display: 'flex',
+                alignItems: 'flex-start',
+                justifyContent: 'space-between',
+                gap: '12px',
+                boxShadow: syncNotification.type === 'success'
+                  ? '0 8px 24px rgba(16, 185, 129, 0.25)'
+                  : '0 8px 24px rgba(239, 68, 68, 0.25)',
+                animation: 'fadeIn 0.2s ease-in-out',
               }}
             >
-              {syncMessage}
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <span
+                  style={{
+                    background: syncNotification.type === 'success' ? '#10b981' : '#ef4444',
+                    color: '#ffffff',
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: '50%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.85rem',
+                    fontWeight: 'bold',
+                    flexShrink: 0,
+                  }}
+                >
+                  {syncNotification.type === 'success' ? '✓' : '⚠'}
+                </span>
+                <div>
+                  <div
+                    style={{
+                      color: syncNotification.type === 'success' ? '#6ee7b7' : '#fca5a5',
+                      fontWeight: 700,
+                      fontSize: '0.85rem',
+                      marginBottom: '2px',
+                    }}
+                  >
+                    {syncNotification.title}
+                  </div>
+                  <div style={{ color: '#e2e8f0', fontSize: '0.78rem' }}>
+                    {syncNotification.message}
+                  </div>
+                  {syncNotification.details && (
+                    <div style={{ color: '#94a3b8', fontSize: '0.72rem', marginTop: '3px', fontStyle: 'italic' }}>
+                      {syncNotification.details}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setSyncNotification(null)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#94a3b8',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  padding: '2px 6px',
+                }}
+              >
+                ✕
+              </button>
             </div>
           )}
 
@@ -379,7 +524,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
                           stroke={isDirect ? '#10b981' : '#38bdf8'}
                           strokeWidth={isDirect ? '2' : '1.5'}
                           strokeDasharray={isDirect ? 'none' : '4 3'}
-                          opacity={0.7}
+                          opacity={0.75}
                         />
                         {/* Midpoint latency / hop tag */}
                         <rect
@@ -421,7 +566,7 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
                         style={{ cursor: 'pointer' }}
                       >
                         {isLocal && (
-                          <circle cx={pos.x} cy={pos.y} r={radius + 6} fill="none" stroke="#38bdf8" opacity="0.3" />
+                          <circle cx={pos.x} cy={pos.y} r={radius + 6} fill="none" stroke="#38bdf8" opacity="0.35" />
                         )}
                         <circle
                           cx={pos.x}
@@ -466,9 +611,10 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
                     gap: '12px',
                     fontSize: '0.68rem',
                     color: '#94a3b8',
-                    background: 'rgba(15, 23, 42, 0.8)',
+                    background: 'rgba(15, 23, 42, 0.85)',
                     padding: '4px 8px',
                     borderRadius: '6px',
+                    border: '1px solid #334155',
                   }}
                 >
                   <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -675,65 +821,72 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
                 <div>LINK QUALITY</div>
               </div>
 
-              {(topology?.routes && topology.routes.length > 0 ? topology.routes : peers.map(p => ({
-                dest_id: p.node_id,
-                next_hop_id: p.node_id,
-                hop_count: 1,
-                latency_ms: p.latency_ms || 12.0,
-                relay_path: [p.node_id],
-                link_quality: 'EXCELLENT',
-                last_updated: Date.now() / 1000,
-                age_seconds: 2,
-              }))).map((route) => (
+              {displayRoutes.length === 0 ? (
                 <div
-                  key={route.dest_id}
                   style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1.4fr 1.2fr 0.8fr 0.8fr 1fr',
-                    padding: '10px 12px',
+                    padding: '24px',
+                    textAlign: 'center',
                     background: '#1e293b',
-                    border: '1px solid #334155',
                     borderRadius: '6px',
-                    fontSize: '0.78rem',
-                    alignItems: 'center',
+                    border: '1px dashed #334155',
+                    color: '#94a3b8',
+                    fontSize: '0.82rem',
                   }}
                 >
-                  <div style={{ color: '#f8fafc', fontWeight: '600', fontFamily: 'monospace' }}>
-                    #{route.dest_id.slice(0, 14)}
-                  </div>
-                  <div style={{ color: '#94a3b8', fontFamily: 'monospace' }}>
-                    {route.next_hop_id === route.dest_id ? 'Direct (Self)' : `#${route.next_hop_id.slice(0, 10)}`}
-                  </div>
-                  <div>
-                    <span
-                      style={{
-                        background: route.hop_count === 1 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(56, 189, 248, 0.15)',
-                        color: route.hop_count === 1 ? '#34d399' : '#38bdf8',
-                        padding: '2px 8px',
-                        borderRadius: '10px',
-                        fontSize: '0.70rem',
-                        fontWeight: '700',
-                      }}
-                    >
-                      {route.hop_count} {route.hop_count === 1 ? 'hop' : 'hops'}
-                    </span>
-                  </div>
-                  <div style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>
-                    {route.latency_ms} ms
-                  </div>
-                  <div>
-                    <span
-                      style={{
-                        color: route.link_quality === 'EXCELLENT' ? '#34d399' : '#fbbf24',
-                        fontWeight: '700',
-                        fontSize: '0.72rem',
-                      }}
-                    >
-                      ● {route.link_quality}
-                    </span>
-                  </div>
+                  No active routes discovered. Connect peers or force delta sync to populate multi-hop routes.
                 </div>
-              ))}
+              ) : (
+                displayRoutes.map((route) => (
+                  <div
+                    key={route.dest_id}
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '1.4fr 1.2fr 0.8fr 0.8fr 1fr',
+                      padding: '10px 12px',
+                      background: '#1e293b',
+                      border: '1px solid #334155',
+                      borderRadius: '6px',
+                      fontSize: '0.78rem',
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div style={{ color: '#f8fafc', fontWeight: '600', fontFamily: 'monospace' }}>
+                      #{route.dest_id.slice(0, 14)}
+                    </div>
+                    <div style={{ color: '#94a3b8', fontFamily: 'monospace' }}>
+                      {route.next_hop_id === route.dest_id ? 'Direct (Self)' : `#${route.next_hop_id.slice(0, 10)}`}
+                    </div>
+                    <div>
+                      <span
+                        style={{
+                          background: route.hop_count === 1 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(56, 189, 248, 0.15)',
+                          color: route.hop_count === 1 ? '#34d399' : '#38bdf8',
+                          padding: '2px 8px',
+                          borderRadius: '10px',
+                          fontSize: '0.70rem',
+                          fontWeight: '700',
+                        }}
+                      >
+                        {route.hop_count} {route.hop_count === 1 ? 'hop' : 'hops'}
+                      </span>
+                    </div>
+                    <div style={{ color: '#cbd5e1', fontFamily: 'monospace' }}>
+                      {route.latency_ms} ms
+                    </div>
+                    <div>
+                      <span
+                        style={{
+                          color: route.link_quality === 'EXCELLENT' ? '#34d399' : '#fbbf24',
+                          fontWeight: '700',
+                          fontSize: '0.72rem',
+                        }}
+                      >
+                        ● {route.link_quality}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
@@ -755,18 +908,36 @@ export const PeerTopologyModal: React.FC<PeerTopologyModalProps> = ({
           <div style={{ display: 'flex', gap: '10px' }}>
             <button
               onClick={handleSync}
-              disabled={syncing || peers.length === 0}
+              disabled={syncing}
               style={{
-                padding: '8px 16px',
-                background: '#0284c7',
+                padding: '8px 18px',
+                background: syncing ? '#0369a1' : '#0284c7',
                 color: '#ffffff',
                 border: 'none',
                 borderRadius: '6px',
                 fontSize: '0.82rem',
                 fontWeight: '600',
                 cursor: syncing ? 'wait' : 'pointer',
+                opacity: syncing ? 0.8 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                transition: 'background 0.2s ease',
               }}
             >
+              {syncing && (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: '12px',
+                    height: '12px',
+                    border: '2px solid #ffffff',
+                    borderTopColor: 'transparent',
+                    borderRadius: '50%',
+                    animation: 'spin 0.8s linear infinite',
+                  }}
+                />
+              )}
               {syncing ? 'Syncing...' : 'Force Delta Sync Now'}
             </button>
             <button

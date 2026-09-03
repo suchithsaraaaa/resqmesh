@@ -34,6 +34,8 @@ export type TacticalEventType =
   | 'SYNC_COMPLETED'
   | 'SYSTEM_ONLINE'
   | 'SYSTEM_OFFLINE'
+  | 'MESH_INITIALIZED'
+  | 'MESH_DELTA_SYNC_COMPLETED'
   | 'MESH_STANDALONE_INIT';
 
 export type EventSeverity = 'CRITICAL' | 'WARNING' | 'INFO' | 'SUCCESS' | 'SYNC';

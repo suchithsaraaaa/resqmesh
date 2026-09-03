@@ -161,6 +161,11 @@ class NodeManager:
         peer_data["status"] = "online"
         self._active_peers[peer_id] = peer_data
 
+    def remove_peer(self, peer_id: str) -> None:
+        """Remove a peer from active peers list."""
+        if peer_id in self._active_peers:
+            del self._active_peers[peer_id]
+
     def get_active_peers(self, timeout_seconds: float = 30.0) -> List[dict]:
         """Return list of online peers seen within timeout threshold."""
         now = time.time()

@@ -67,7 +67,7 @@ export const LiveTacticalActivityFeed: React.FC<LiveTacticalActivityFeedProps> =
       );
     }
     if (filter === 'MESH') {
-      return evt.type.startsWith('MESH_');
+      return evt.type.startsWith('MESH_') || evt.type.startsWith('SYNC_');
     }
     if (filter === 'RESOURCES') {
       return evt.type.startsWith('RESOURCE_');

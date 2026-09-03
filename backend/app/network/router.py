@@ -110,6 +110,23 @@ class ResQMeshRouter:
                 relay_path=relay_path or ([next_hop_id] if next_hop_id != dest_id else [dest_id]),
             )
 
+    def remove_route(self, dest_id: str) -> None:
+        """Explicitly remove a route when a node departs the mesh."""
+        if dest_id in self.routing_table:
+            del self.routing_table[dest_id]
+
+    def prune_stale_routes(self, active_peer_ids: Set[str], max_age_seconds: float = 45.0) -> None:
+        """Prune 1-hop direct routes no longer in active peers, and expired multi-hop routes."""
+        now = time.time()
+        to_delete = []
+        for dest_id, route in self.routing_table.items():
+            if route.hop_count == 1 and dest_id not in active_peer_ids:
+                to_delete.append(dest_id)
+            elif route.hop_count > 1 and (now - route.last_updated > 120.0):
+                to_delete.append(dest_id)
+        for did in to_delete:
+            del self.routing_table[did]
+
     def get_routes(self) -> List[dict]:
         """Return list of active routes sorted by hop count."""
         now = time.time()
@@ -117,7 +134,7 @@ class ResQMeshRouter:
         for did in expired:
             del self.routing_table[did]
 
-        return [r.to_dict() for r in sorted(self.routing_table.values(), key=lambda x: x.hop_count)]
+        return [r.to_dict() for r in sorted(self.routing_table.values(), key=lambda x: (x.hop_count, x.latency_ms))]
 
     def get_topology(self) -> dict:
         """Return graph representation of multi-hop mesh topology."""
@@ -128,11 +145,15 @@ class ResQMeshRouter:
 
         nm = NodeManager.get_instance()
         direct_peers = nm.get_active_peers()
+        active_peer_ids = {p.get("node_id") for p in direct_peers if p.get("node_id")}
 
-        # Seed routes with direct peers (hop_count: 1)
+        # Prune direct routes that are no longer in active peers
+        self.prune_stale_routes(active_peer_ids)
+
+        # Seed/update routes with active direct peers (hop_count: 1)
         for p in direct_peers:
             pid = p.get("node_id")
-            if pid and pid not in self.routing_table:
+            if pid:
                 self.update_route(
                     dest_id=pid,
                     next_hop_id=pid,
