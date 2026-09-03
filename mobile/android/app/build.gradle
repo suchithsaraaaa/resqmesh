@@ -79,9 +79,10 @@ android {
         applicationId "com.resqmesh"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 33
-        versionName "1.0.33"
+        versionCode 34
+        versionName "1.0.34"
     }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')

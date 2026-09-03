@@ -44,7 +44,9 @@ keystore.properties
 # Mobile & Desktop build outputs
 # Mobile & Desktop build outputs & Releases
 .android-sdk/
+.jdk17/
 android/app/build/
+
 ios/Pods/
 ios/build/
 desktop/dist/

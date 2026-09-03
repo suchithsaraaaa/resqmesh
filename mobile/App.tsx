@@ -23,6 +23,9 @@ export default function App() {
         if (isMounted) {
           setDbReady(true);
         }
+        // Initialize independent background mesh network service
+        const { MeshService } = require('./src/network/meshService');
+        MeshService.getInstance().init().catch(() => {});
       } catch (err: any) {
         console.error('Local SQLite storage initialization error:', err);
         if (isMounted) {

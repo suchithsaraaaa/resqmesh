@@ -166,13 +166,30 @@ class NodeManager:
         if peer_id in self._active_peers:
             del self._active_peers[peer_id]
 
+    def get_peer(self, peer_id: str) -> Optional[dict]:
+        """Return peer data dictionary if known."""
+        return self._active_peers.get(peer_id)
+
+    def touch_peer(self, peer_id: str, latency_ms: Optional[float] = None) -> bool:
+        """Update last_seen timestamp and latency for an active registered peer."""
+        if peer_id in self._active_peers:
+            self._active_peers[peer_id]["last_seen"] = time.time()
+            self._active_peers[peer_id]["status"] = "online"
+            if latency_ms is not None and latency_ms > 0:
+                self._active_peers[peer_id]["latency_ms"] = latency_ms
+            return True
+        return False
+
     def get_active_peers(self, timeout_seconds: float = 30.0) -> List[dict]:
         """Return list of online peers seen within timeout threshold."""
         now = time.time()
         active = []
         for peer_id, peer in list(self._active_peers.items()):
             if now - peer.get("last_seen", 0) <= timeout_seconds:
+                peer["status"] = "online"
                 active.append(peer)
             else:
                 peer["status"] = "offline"
         return active
+
+

@@ -80,9 +80,21 @@ class PeerRegisterRequest(BaseModel):
 
 # --- Local Node Management ---
 @router.get("/node/status")
-def get_local_node_status():
-    """Return local node identity, role, configuration state, and uptime."""
-    return NodeManager.get_instance().get_status()
+def get_local_node_status(request: Request, peer_id: Optional[str] = None):
+    """Return local node identity, role, configuration state, and uptime.
+    If peer_id or X-Peer-ID header is provided, automatically refreshes the peer's heartbeat lease.
+    """
+    nm = NodeManager.get_instance()
+    effective_peer_id = peer_id
+    if not effective_peer_id and request:
+        effective_peer_id = request.headers.get("X-Peer-ID") or request.headers.get("X-Node-ID")
+    
+    if effective_peer_id:
+        nm.touch_peer(effective_peer_id)
+
+    return nm.get_status()
+
+
 
 
 @router.get("/node/mesh-status")
@@ -295,6 +307,83 @@ def register_peer(peer_in: PeerRegisterRequest, request: Request, db: Session = 
             "role": nm.role,
             "api_port": nm.api_port,
         },
+    }
+
+
+class PeerHeartbeatRequest(BaseModel):
+    node_id: str
+    latency_ms: float = 0.0
+    ip_address: Optional[str] = None
+    api_port: int = 8000
+    name: Optional[str] = None
+    role: Optional[str] = None
+
+
+@router.post("/peers/heartbeat", status_code=status.HTTP_200_OK)
+@router.post("/node/heartbeat", status_code=status.HTTP_200_OK)
+def peer_heartbeat(hb_in: PeerHeartbeatRequest, request: Request, db: Session = Depends(get_db)):
+    """Receive keep-alive heartbeat from a connected peer, refresh its lease timestamp, and keep 1-hop route active."""
+    client_host = request.client.host if request.client else None
+    nm = NodeManager.get_instance()
+    now = time.time()
+
+    # 1. Update or touch peer in NodeManager
+    peer = nm.get_peer(hb_in.node_id)
+    if peer:
+        peer["last_seen"] = now
+        peer["status"] = "online"
+        if hb_in.latency_ms > 0:
+            peer["latency_ms"] = hb_in.latency_ms
+        if client_host and client_host not in ["127.0.0.1", "localhost", "::1"] and peer.get("ip_address") != client_host:
+            peer["ip_address"] = client_host
+    else:
+        # Re-register if node manager restarted or peer dropped
+        ip_to_use = hb_in.ip_address or client_host or "127.0.0.1"
+        if client_host and client_host not in ["127.0.0.1", "localhost", "::1"]:
+            ip_to_use = client_host
+        nm.register_peer({
+            "node_id": hb_in.node_id,
+            "name": hb_in.name or f"Node-{hb_in.node_id[-4:].upper()}",
+            "role": hb_in.role or "responder",
+            "ip_address": ip_to_use,
+            "api_port": hb_in.api_port,
+            "latency_ms": hb_in.latency_ms if hb_in.latency_ms > 0 else 12.0,
+            "last_seen": now,
+            "status": "online",
+        })
+
+    # 2. Maintain active 1-hop route in router
+    try:
+        from backend.app.network.router import ResQMeshRouter
+        router = ResQMeshRouter.get_instance(nm.node_id)
+        router.update_route(
+            dest_id=hb_in.node_id,
+            next_hop_id=hb_in.node_id,
+            hop_count=1,
+            latency_ms=hb_in.latency_ms if hb_in.latency_ms > 0 else 12.0,
+            relay_path=[nm.node_id, hb_in.node_id],
+        )
+    except Exception:
+        try:
+            from app.network.router import ResQMeshRouter
+            router = ResQMeshRouter.get_instance(nm.node_id)
+            router.update_route(
+                dest_id=hb_in.node_id,
+                next_hop_id=hb_in.node_id,
+                hop_count=1,
+                latency_ms=hb_in.latency_ms if hb_in.latency_ms > 0 else 12.0,
+                relay_path=[nm.node_id, hb_in.node_id],
+            )
+        except Exception:
+            pass
+
+    return {
+        "status": "ok",
+        "peer_id": hb_in.node_id,
+        "commander_node_id": nm.node_id,
+        "commander_name": nm.node_name,
+        "commander_role": nm.role,
+        "server_time": now,
     }
 
 

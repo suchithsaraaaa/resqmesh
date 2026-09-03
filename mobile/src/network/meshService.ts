@@ -86,10 +86,12 @@ export class MeshService {
   private discoveryMode: string = 'Standing By';
 
   private manualCommanderIp: string | null = null;
+  private lastCommanderAddress: string | null = null;
   private heartbeatInterval: any = null;
   private syncInterval: any = null;
   private isConnecting: boolean = false;
   private consecutiveFailures: number = 0;
+  private isConfigLoaded: boolean = false;
   private listeners: Set<MeshStateListener> = new Set();
 
   private constructor() {
@@ -108,14 +110,40 @@ export class MeshService {
   }
 
   /**
+   * Load saved Commander address and user preferences from persistent SQLite storage.
+   */
+  public async loadPersistedConfig(): Promise<void> {
+    if (this.isConfigLoaded) {
+      return;
+    }
+    try {
+      if (db && db.config) {
+        const savedCommander = await db.config.get('last_commander_host');
+        if (savedCommander && savedCommander.trim()) {
+          this.lastCommanderAddress = savedCommander.trim();
+        }
+        const savedManual = await db.config.get('manual_commander_ip');
+        if (savedManual && savedManual.trim()) {
+          this.manualCommanderIp = savedManual.trim();
+        }
+      }
+      this.isConfigLoaded = true;
+    } catch {
+      this.isConfigLoaded = true;
+    }
+  }
+
+  /**
    * Initialize mesh subsystem and begin automatic discovery.
    */
   public async init(): Promise<void> {
+    await this.loadPersistedConfig();
+
     this.state = 'CONNECTING';
     this.discoveryMode = 'Candidate Probing';
     this.notifyListeners();
 
-    // Start background loops
+    // Start background loops (idempotent)
     this.startHeartbeatLoop();
     this.startSyncLoop();
 
@@ -192,19 +220,25 @@ export class MeshService {
 
   /**
    * Candidate IPs to probe for Command Center desktop:
-   * 1. Manual user override if set.
-   * 2. BlueStacks / Android Emulator host gateway (10.0.2.2:8000).
-   * 3. Standard LAN / Wi-Fi Hotspot gateways (192.168.1.1, 192.168.43.1, 192.168.137.1, 192.168.0.1).
-   * 4. Localhost fallback (127.0.0.1:8000).
+   * 1. Previously successful Commander address (persisted in SQLite).
+   * 2. Manual user override if set.
+   * 3. BlueStacks / Android Emulator host gateway (10.0.2.2:8000).
+   * 4. Standard LAN / Wi-Fi Hotspot gateways (192.168.1.1, 192.168.43.1, 192.168.137.1, 192.168.0.1).
+   * 5. Localhost fallback (127.0.0.1:8000).
    */
   public getCandidateIps(): string[] {
     const candidates: string[] = [];
+    // 1. Manual user override has highest explicit priority if provided
     if (this.manualCommanderIp && this.manualCommanderIp.trim()) {
       candidates.push(this.manualCommanderIp.trim());
     }
-    // BlueStacks / Emulator default host alias
+    // 2. Previously successful Commander address (auto cached)
+    if (this.lastCommanderAddress && this.lastCommanderAddress.trim()) {
+      candidates.push(this.lastCommanderAddress.trim());
+    }
+    // 3. BlueStacks / Emulator default host alias
     candidates.push('10.0.2.2:8000');
-    // Local subnet gateways
+    // 4. Local subnet gateways
     candidates.push('192.168.1.1:8000');
     candidates.push('192.168.43.1:8000'); // Android Wi-Fi Hotspot gateway
     candidates.push('192.168.137.1:8000'); // Windows Hosted Network hotspot
@@ -215,12 +249,20 @@ export class MeshService {
   }
 
   /**
-   * Set a manual Commander IP address or hostname.
+   * Set a manual Commander IP address or hostname and persist.
    */
   public setManualCommanderIp(ip: string | null): void {
     this.manualCommanderIp = ip ? ip.trim() : null;
+    if (db && db.config) {
+      if (this.manualCommanderIp) {
+        db.config.set('manual_commander_ip', this.manualCommanderIp).catch(() => {});
+      } else {
+        db.config.delete('manual_commander_ip').catch(() => {});
+      }
+    }
     this.notifyListeners();
   }
+
 
   /**
    * Explicitly test connectivity to a target Commander IP:port.
@@ -348,10 +390,16 @@ export class MeshService {
             this.activeTransport = transportLabel;
             this.discoveryMode = this.manualCommanderIp && this.manualCommanderIp.includes(norm.host)
               ? 'Manual IP Pairing'
-              : 'Gateway Probing';
+              : (this.lastCommanderAddress && this.lastCommanderAddress.includes(norm.host) ? 'Auto Cached Reconnect' : 'Gateway Probing');
             this.consecutiveFailures = 0;
             this.lastHandshakeTime = Date.now();
             this.lastError = null;
+
+            // Persist successful Commander address locally
+            this.lastCommanderAddress = `${norm.host}:${norm.port}`;
+            if (db && db.config) {
+              db.config.set('last_commander_host', this.lastCommanderAddress).catch(() => {});
+            }
 
             this.notifyListeners();
             this.isConnecting = false;
@@ -493,6 +541,7 @@ export class MeshService {
   private startHeartbeatLoop(): void {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
     }
 
     this.heartbeatInterval = setInterval(async () => {
@@ -501,24 +550,55 @@ export class MeshService {
         try {
           const startTime = Date.now();
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 2000);
+          const timeoutId = setTimeout(() => controller.abort(), 2500);
 
-          const res = await fetch(`${url}/node/status`, {
-            method: 'GET',
-            headers: { 'User-Agent': 'ResQMesh-Mobile/1.0', Accept: 'application/json' },
+          // Dedicated peer heartbeat with explicit node identity and latency tracking
+          const res = await fetch(`${url}/peers/heartbeat`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'User-Agent': 'ResQMesh-Mobile/1.0',
+              'X-Peer-ID': this.nodeId,
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              node_id: this.nodeId,
+              name: this.nodeName,
+              role: this.role,
+              ip_address: this.localIp,
+              api_port: this.apiPort,
+              latency_ms: this.connectedCommander.latencyMs || 10.0,
+            }),
             signal: controller.signal,
           });
           clearTimeout(timeoutId);
 
           if (res.ok) {
-            this.connectedCommander.latencyMs = Math.max(1, Date.now() - startTime);
+            const latencyMs = Math.max(1, Date.now() - startTime);
+            this.connectedCommander.latencyMs = latencyMs;
             this.connectedCommander.lastSeen = Date.now();
             this.consecutiveFailures = 0;
+            this.lastError = null;
             this.notifyListeners();
             return;
+          } else if (res.status === 404) {
+            // Fallback for older backend versions
+            const fallbackRes = await fetch(`${url}/node/status?peer_id=${encodeURIComponent(this.nodeId)}`, {
+              method: 'GET',
+              headers: { 'User-Agent': 'ResQMesh-Mobile/1.0', 'X-Peer-ID': this.nodeId, Accept: 'application/json' },
+            });
+            if (fallbackRes.ok) {
+              this.connectedCommander.latencyMs = Math.max(1, Date.now() - startTime);
+              this.connectedCommander.lastSeen = Date.now();
+              this.consecutiveFailures = 0;
+              this.lastError = null;
+              this.notifyListeners();
+              return;
+            }
           }
-        } catch {
-          // Heartbeat missed
+        } catch (err: any) {
+          // Heartbeat failed
+          this.lastError = `Heartbeat missed: ${err.message || 'Timeout'}`;
         }
 
         this.consecutiveFailures += 1;
@@ -528,7 +608,7 @@ export class MeshService {
           this.discoverAndConnect().catch(() => {});
         }
       } else if (this.state === 'STANDALONE' || this.state === 'RECONNECTING' || this.state === 'DISCONNECTED') {
-        // Periodically attempt to find Command Center
+        // Periodically attempt to discover and reconnect to Command Center
         this.discoverAndConnect().catch(() => {});
       }
     }, 5000);
@@ -577,7 +657,14 @@ export class MeshService {
     this.isConnecting = false;
     this.consecutiveFailures = 0;
     this.state = 'DISCONNECTED';
+    this.manualCommanderIp = null;
+    this.lastCommanderAddress = null;
+    this.isConfigLoaded = false;
+    this.lastError = null;
+    this.lastProbeTarget = null;
+    this.lastProbeResult = null;
   }
 }
 
 export default MeshService;
+

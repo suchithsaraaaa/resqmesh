@@ -134,6 +134,10 @@ async function init(): Promise<void> {
       last_sync_timestamp   TEXT NOT NULL,
       device_clock          INTEGER NOT NULL DEFAULT 0
     );`,
+    `CREATE TABLE IF NOT EXISTS app_config (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );`,
   ];
 
   for (const stmt of ddlStatements) {
@@ -322,6 +326,34 @@ async function upsertSyncAck(
   );
 }
 
+// ─── App Config ──────────────────────────────────────────────────────────────
+
+async function getConfig(key: string): Promise<string | null> {
+  const db = getDb();
+  try {
+    const [result] = await db.executeSql('SELECT value FROM app_config WHERE key = ?', [key]);
+    if (result.rows.length > 0) {
+      return result.rows.item(0).value;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function setConfig(key: string, value: string): Promise<void> {
+  const db = getDb();
+  await db.executeSql(
+    'INSERT OR REPLACE INTO app_config (key, value) VALUES (?, ?)',
+    [key, value],
+  );
+}
+
+async function deleteConfig(key: string): Promise<void> {
+  const db = getDb();
+  await db.executeSql('DELETE FROM app_config WHERE key = ?', [key]);
+}
+
 // ─── Export ───────────────────────────────────────────────────────────────────
 
 const db = {
@@ -334,6 +366,12 @@ const db = {
   },
   messages: { create: createMessage, list: getMessages },
   syncAcks: { upsert: upsertSyncAck },
+  config: {
+    get: getConfig,
+    set: setConfig,
+    delete: deleteConfig,
+  },
 };
 
 export default db;
+
