@@ -210,12 +210,41 @@ export const App: React.FC = () => {
                 nodeId: p.node_id,
                 actor: p.name || p.node_id,
                 title: `Mesh node joined: ${p.name || p.node_id}`,
-                description: `${p.role === 'commander' ? 'Commander' : 'Responder'} connected to tactical mesh via ${p.ip_address || 'LAN'}:${p.api_port || 8000}`,
+                description: `${p.role === 'commander' ? 'Commander' : 'Responder'} "${p.name || p.node_id}" connected to tactical mesh via ${p.ip_address || 'LAN'}:${p.api_port || 8000}`,
                 metadata: { role: p.role, ip: p.ip_address, port: p.api_port },
               });
             }
           });
-          prevPeerIdsRef.current = new Set(data.map((p: any) => p.node_id));
+
+          // Detect disconnected peers
+          const currentPeerIds = new Set(data.map((p: any) => p.node_id));
+          prevPeerIdsRef.current.forEach((oldId) => {
+            if (!currentPeerIds.has(oldId) && oldId !== nodeId) {
+              const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              setNotifications((prev) => [
+                {
+                  id: `notif-peer-disc-${oldId}-${Date.now()}`,
+                  type: 'peer_disconnected',
+                  title: 'Peer Disconnected',
+                  detail: `Peer node "${oldId}" disconnected from tactical mesh.`,
+                  timestamp: timeStr,
+                  icon: '⚠️',
+                  badgeColor: '#f59e0b',
+                },
+                ...prev.slice(0, 39),
+              ]);
+              TacticalEventBus.publish({
+                type: 'MESH_NODE_DISCONNECTED',
+                severity: 'WARNING',
+                nodeId: oldId,
+                actor: oldId,
+                title: `Mesh node disconnected: ${oldId}`,
+                description: `Field node "${oldId}" disconnected from tactical mesh.`,
+              });
+            }
+          });
+
+          prevPeerIdsRef.current = currentPeerIds;
         }
       }
     } catch {

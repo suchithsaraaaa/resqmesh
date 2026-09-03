@@ -1,11 +1,16 @@
+import os
+import sys
 import json
 import time
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
 from sqlalchemy.pool import StaticPool
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 import backend.app.models
 from backend.app.database import Base, get_db
@@ -89,9 +94,11 @@ def test_idempotent_event_ingestion_and_materialization():
     Verify /events/ingest stores in EventLog and materializes domain records,
     suppressing duplicates without error.
     """
-    event_id = "evt-inc-999-uuid"
+    t_now = time.time()
+    event_id = f"evt-inc-999-{t_now}"
+    inc_id = f"inc-999-{t_now}"
     inc_payload = {
-        "incident_id": "inc-999",
+        "incident_id": inc_id,
         "title": "Substation Fire",
         "category": "fire",
         "severity": "critical",
@@ -105,7 +112,7 @@ def test_idempotent_event_ingestion_and_materialization():
         "event_id": event_id,
         "event_type": "incident.created",
         "origin_node_id": "NODE-PEER-BETA",
-        "timestamp": time.time(),
+        "timestamp": t_now,
         "payload": json.dumps(inc_payload),
         "version": 1,
         "hop_count": 1,
@@ -117,7 +124,7 @@ def test_idempotent_event_ingestion_and_materialization():
     assert r1.json()["status"] in ["delivered", "ingested"]
 
     # Verify incident exists in operational incidents API
-    inc_resp = client.get("/incidents/inc-999")
+    inc_resp = client.get(f"/incidents/{inc_id}")
     assert inc_resp.status_code == 200
     assert inc_resp.json()["title"] == "Substation Fire"
 
@@ -127,10 +134,11 @@ def test_idempotent_event_ingestion_and_materialization():
     assert r2.json()["status"] == "duplicate_suppressed"
 
     # Ingest related report event
-    rep_event_id = "evt-rep-888-uuid"
+    rep_event_id = f"evt-rep-888-{t_now}"
+    rep_id = f"rep-888-{t_now}"
     rep_payload = {
-        "report_id": "rep-888",
-        "incident_id": "inc-999",
+        "report_id": rep_id,
+        "incident_id": inc_id,
         "device_id": "NODE-PEER-BETA",
         "user_id": "responder-sarah",
         "category": "fire",
@@ -152,6 +160,6 @@ def test_idempotent_event_ingestion_and_materialization():
     assert r3.json()["status"] in ["delivered", "ingested"]
 
     # Verify report is linked to incident
-    inc_with_reports = client.get("/incidents/inc-999").json()
+    inc_with_reports = client.get(f"/incidents/{inc_id}").json()
     assert len(inc_with_reports["reports"]) >= 1
-    assert inc_with_reports["reports"][0]["report_id"] == "rep-888"
+    assert inc_with_reports["reports"][0]["report_id"] == rep_id

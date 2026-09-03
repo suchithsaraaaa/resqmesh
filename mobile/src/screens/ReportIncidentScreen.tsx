@@ -82,7 +82,7 @@ export default function ReportIncidentScreen({navigation}: Props) {
       const parsedLng = parseFloat(longitude);
 
       // 4. Save report locally to SQLite database
-      await db.reports.create({
+      const newReport = {
         report_id: reportId,
         device_id: DEVICE_ID,
         user_id: USER_ID,
@@ -92,9 +92,19 @@ export default function ReportIncidentScreen({navigation}: Props) {
         category,
         attachments: null,
         device_clock: Date.now(),
-      });
+        timestamp: new Date().toISOString(),
+      };
+      await db.reports.create(newReport);
 
-      // 5. Display clear offline persistence confirmation
+      // 5. If mesh connection is active, sync immediately across mesh
+      try {
+        const { MeshService } = require('../network/meshService');
+        MeshService.getInstance().syncNewReport(newReport).catch(() => {});
+      } catch {
+        // Safe offline fallback
+      }
+
+      // 6. Display clear offline persistence confirmation
       Alert.alert(
         '✅ Report Saved Offline',
         'Your incident report has been saved locally to device storage and queued for peer sync.',

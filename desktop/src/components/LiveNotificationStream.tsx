@@ -2,7 +2,7 @@ import React from 'react';
 
 export interface MeshActivityItem {
   id: string;
-  type: 'incident_created' | 'incident_merged' | 'resource_dispatched' | 'peer_joined' | 'sync_verified';
+  type: 'incident_created' | 'incident_merged' | 'resource_dispatched' | 'peer_joined' | 'peer_disconnected' | 'sync_verified';
   title: string;
   detail: string;
   timestamp: string;

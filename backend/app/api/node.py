@@ -154,13 +154,14 @@ def setup_local_node(setup_in: NodeSetupRequest, db: Session = Depends(get_db)):
 @router.post("/handshake")
 def handle_handshake(syn_payload: dict, db: Session = Depends(get_db)):
     """Handle incoming peer handshake challenge and respond with authenticated ACK."""
-    if not node_manager.keypair:
-        node_manager.keypair = DeviceKeyPair()
+    nm = NodeManager.get_instance()
+    if not nm.keypair:
+        nm.keypair = DeviceKeyPair()
 
     valid, ack_payload = HandshakeManager.verify_syn_and_create_ack(
         syn_payload=syn_payload,
-        local_node_id=node_manager.node_id,
-        keypair=node_manager.keypair,
+        local_node_id=nm.node_id,
+        keypair=nm.keypair,
     )
     if not valid or not ack_payload:
         raise HTTPException(
@@ -195,7 +196,7 @@ def handle_handshake(syn_payload: dict, db: Session = Depends(get_db)):
 @router.get("/peers/")
 def list_discovered_peers():
     """List currently active LAN peer nodes."""
-    return node_manager.get_active_peers()
+    return NodeManager.get_instance().get_active_peers()
 
 
 class PeerConnectRequest(BaseModel):
@@ -223,7 +224,33 @@ def register_peer(peer_in: PeerRegisterRequest, request: Request, db: Session = 
     peer_dict["last_seen"] = time.time()
     peer_dict["status"] = "online"
 
-    node_manager.register_peer(peer_dict)
+    nm = NodeManager.get_instance()
+    nm.register_peer(peer_dict)
+
+    # Update router routing table immediately
+    try:
+        from backend.app.network.router import ResQMeshRouter
+        router = ResQMeshRouter.get_instance(nm.node_id)
+        router.update_route(
+            dest_id=peer_in.node_id,
+            next_hop_id=peer_in.node_id,
+            hop_count=1,
+            latency_ms=peer_in.latency_ms if peer_in.latency_ms > 0 else 12.0,
+            relay_path=[nm.node_id, peer_in.node_id],
+        )
+    except Exception:
+        try:
+            from app.network.router import ResQMeshRouter
+            router = ResQMeshRouter.get_instance(nm.node_id)
+            router.update_route(
+                dest_id=peer_in.node_id,
+                next_hop_id=peer_in.node_id,
+                hop_count=1,
+                latency_ms=peer_in.latency_ms if peer_in.latency_ms > 0 else 12.0,
+                relay_path=[nm.node_id, peer_in.node_id],
+            )
+        except Exception:
+            pass
 
     # Update in database
     existing = db.query(NodeRecord).filter_by(node_id=peer_in.node_id).first()
@@ -263,10 +290,10 @@ def register_peer(peer_in: PeerRegisterRequest, request: Request, db: Session = 
         "status": "ok",
         "registered_peer": peer_in.node_id,
         "my_node": {
-            "node_id": node_manager.node_id,
-            "name": node_manager.node_name,
-            "role": node_manager.role,
-            "api_port": node_manager.api_port,
+            "node_id": nm.node_id,
+            "name": nm.node_name,
+            "role": nm.role,
+            "api_port": nm.api_port,
         },
     }
 

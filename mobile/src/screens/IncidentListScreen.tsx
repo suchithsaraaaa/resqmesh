@@ -1,8 +1,4 @@
-/**
- * Incident List screen — shows all locally stored field reports.
- * Pulls from local SQLite; no network required.
- */
-import React, {useState, useCallback} from 'react';
+import React, {useState, useCallback, useEffect} from 'react';
 import {
   View,
   Text,
@@ -14,6 +10,9 @@ import {
 } from 'react-native';
 import {useFocusEffect} from '@react-navigation/native';
 import db from '../db/sqlite';
+import {MeshService, MeshStatusInfo} from '../network/meshService';
+import MeshStatusHeader from '../components/MeshStatusHeader';
+import MeshDetailModal from '../components/MeshDetailModal';
 
 const SEVERITY_COLORS: Record<string, string> = {
   low: '#4CAF50',
@@ -38,6 +37,21 @@ interface Props {
 export default function IncidentListScreen({navigation}: Props) {
   const [reports, setReports] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [meshStatus, setMeshStatus] = useState<MeshStatusInfo>(
+    MeshService.getInstance().getStatus(),
+  );
+  const [modalVisible, setModalVisible] = useState(false);
+
+  useEffect(() => {
+    const service = MeshService.getInstance();
+    service.init().catch(err => console.debug('Mesh service init note:', err));
+    const unsubscribe = service.subscribe(newStatus => {
+      setMeshStatus(newStatus);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   const loadReports = useCallback(async () => {
     try {
@@ -134,6 +148,12 @@ export default function IncidentListScreen({navigation}: Props) {
         </TouchableOpacity>
       </View>
 
+      {/* Real-time Mesh Connection Status Badge */}
+      <MeshStatusHeader
+        status={meshStatus}
+        onPress={() => setModalVisible(true)}
+      />
+
       <FlatList
         data={reports}
         keyExtractor={item => item.report_id}
@@ -156,6 +176,13 @@ export default function IncidentListScreen({navigation}: Props) {
             </Text>
           </View>
         }
+      />
+
+      {/* Mesh Detailed Diagnostic Modal */}
+      <MeshDetailModal
+        visible={modalVisible}
+        status={meshStatus}
+        onClose={() => setModalVisible(false)}
       />
     </View>
   );
