@@ -71,12 +71,16 @@ class RAGPipeline:
         """Retrieve relevant SOPs using smart multi-signal retrieval and synthesize field recommendations."""
         debug_output = {}
 
+        ctx = dict(incident_context or {})
+        if category and "category" not in ctx:
+            ctx["category"] = category
+
         # 1. Smart Vector Search with Multi-Signal Boosting
         search_results: List[Tuple[SOPDocument, float]] = []
         if hasattr(self.vector_store, "smart_search"):
             search_results, debug_output = self.vector_store.smart_search(
                 query=description,
-                incident_context=incident_context,
+                incident_context=ctx,
                 top_k=top_k,
                 debug=debug,
             )
@@ -88,6 +92,11 @@ class RAGPipeline:
                 top_k=top_k,
                 category_filter=category,
             )
+            if not search_results:
+                search_results = self.vector_store.search(
+                    query=f"{category or ''} {description}".strip(),
+                    top_k=top_k,
+                )
 
         retrieved_docs: List[dict] = []
         sop_contexts: List[str] = []

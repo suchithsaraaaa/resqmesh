@@ -82,7 +82,7 @@ class PeerRegisterRequest(BaseModel):
 @router.get("/node/status")
 def get_local_node_status():
     """Return local node identity, role, configuration state, and uptime."""
-    return node_manager.get_status()
+    return NodeManager.get_instance().get_status()
 
 
 @router.get("/node/mesh-status")
@@ -111,7 +111,8 @@ def retry_mesh_network_discovery():
 @router.post("/node/setup")
 def setup_local_node(setup_in: NodeSetupRequest, db: Session = Depends(get_db)):
     """First-run onboarding: configure node name and role (responder vs commander)."""
-    result = node_manager.setup_node(
+    mgr = NodeManager.get_instance()
+    result = mgr.setup_node(
         name=setup_in.name,
         role=setup_in.role,
         port=setup_in.port,

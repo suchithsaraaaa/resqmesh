@@ -43,6 +43,22 @@ def clean_test_environment(tmp_path):
     node_mgr = NodeManager(data_dir=data_dir)
     NodeManager._instance = node_mgr
 
+    # Clear any stale dependency overrides from earlier test modules
+    app.dependency_overrides.clear()
+
+    # Clear NodeRecords from earlier tests
+    db = SessionLocal()
+    db.query(NodeRecord).delete()
+    db.commit()
+    db.close()
+
+    # Point node API to this isolated manager
+    try:
+        import backend.app.api.node as node_api
+        node_api.node_manager = node_mgr
+    except Exception:
+        pass
+
     # Reset discovery engine singleton
     DiscoveryEngine._instance = None
     engine_inst = DiscoveryEngine(node_manager=node_mgr)

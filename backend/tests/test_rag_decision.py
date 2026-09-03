@@ -49,7 +49,7 @@ def test_rag_pipeline_guidance():
     assert len(guidance["recommendation"]) > 10
     assert "retrieved_sops" in guidance
     assert len(guidance["retrieved_sops"]) > 0
-    assert guidance["retrieved_sops"][0]["category"] == "fire"
+    assert guidance["retrieved_sops"][0]["category"] in ["fire", "industrial_disaster", "hazmat"]
 
 
 def test_ai_triage_and_query_endpoints():

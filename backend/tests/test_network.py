@@ -11,11 +11,13 @@ def test_get_local_ip():
 
 
 def test_zeroconf_manager_lifecycle():
+    import time
     manager = ResQMeshZeroconfManager(device_id="test-device-001", port=8005)
     manager.start()
     assert manager.is_running is True
     peers = manager.get_peers()
     assert isinstance(peers, list)
+    time.sleep(0.1)
     manager.stop()
     assert manager.is_running is False
 

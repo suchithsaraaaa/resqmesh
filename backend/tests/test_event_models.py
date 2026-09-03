@@ -124,6 +124,7 @@ def test_event_log_idempotency(db_session):
         payload=event_payload,
         version=1,
     )
+    db_session.expunge(event1)
     db_session.add(event2)
     with pytest.raises(IntegrityError):
         db_session.commit()
