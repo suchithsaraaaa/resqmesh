@@ -3,7 +3,7 @@
  * 
  * Provides real-time mesh connection management, multi-candidate discovery,
  * reciprocal peer registration, keep-alive heartbeat, store-and-forward report sync,
- * and truthful state machine transitions for Android / BlueStacks field nodes.
+ * verbose network diagnostics, and truthful state machine transitions for Android field nodes.
  */
 
 import { Platform } from 'react-native';
@@ -30,6 +30,15 @@ export interface ConnectedPeer {
   transport: string;
 }
 
+export interface ProbeLogEntry {
+  timestamp: number;
+  target: string;
+  endpoint: string;
+  result: string;
+  latencyMs: number;
+  error?: string;
+}
+
 export interface MeshStatusInfo {
   state: MobileMeshState;
   nodeId: string;
@@ -44,6 +53,12 @@ export interface MeshStatusInfo {
   pendingOutboxCount: number;
   lastError: string | null;
   candidateIps: string[];
+  lastProbeTime: number | null;
+  lastProbeTarget: string | null;
+  lastProbeResult: string | null;
+  activeTransport: string;
+  discoveryMode: string;
+  manualCommanderIp: string | null;
 }
 
 type MeshStateListener = (status: MeshStatusInfo) => void;
@@ -63,6 +78,12 @@ export class MeshService {
   private lastHandshakeTime: number | null = null;
   private lastSyncTime: number | null = null;
   private lastError: string | null = null;
+
+  private lastProbeTime: number | null = null;
+  private lastProbeTarget: string | null = null;
+  private lastProbeResult: string | null = null;
+  private activeTransport: string = 'Offline Storage (SQLite)';
+  private discoveryMode: string = 'Standing By';
 
   private manualCommanderIp: string | null = null;
   private heartbeatInterval: any = null;
@@ -91,6 +112,7 @@ export class MeshService {
    */
   public async init(): Promise<void> {
     this.state = 'CONNECTING';
+    this.discoveryMode = 'Candidate Probing';
     this.notifyListeners();
 
     // Start background loops
@@ -135,6 +157,36 @@ export class MeshService {
       pendingOutboxCount: 0,
       lastError: this.lastError,
       candidateIps: this.getCandidateIps(),
+      lastProbeTime: this.lastProbeTime,
+      lastProbeTarget: this.lastProbeTarget,
+      lastProbeResult: this.lastProbeResult,
+      activeTransport: this.activeTransport,
+      discoveryMode: this.discoveryMode,
+      manualCommanderIp: this.manualCommanderIp,
+    };
+  }
+
+  /**
+   * Normalize an IP or host string to clean host, port, and URL.
+   */
+  public normalizeTarget(target: string): { host: string; port: number; url: string } {
+    let clean = target.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    let port = 8000;
+    let host = clean;
+
+    if (clean.includes(':')) {
+      const parts = clean.split(':');
+      host = parts[0];
+      const parsedPort = parseInt(parts[1], 10);
+      if (!isNaN(parsedPort) && parsedPort > 0) {
+        port = parsedPort;
+      }
+    }
+
+    return {
+      host,
+      port,
+      url: `http://${host}:${port}`,
     };
   }
 
@@ -142,7 +194,7 @@ export class MeshService {
    * Candidate IPs to probe for Command Center desktop:
    * 1. Manual user override if set.
    * 2. BlueStacks / Android Emulator host gateway (10.0.2.2:8000).
-   * 3. Standard LAN / Wi-Fi Hotspot gateways (192.168.1.1, 192.168.43.1, 192.168.0.1, 192.168.137.1).
+   * 3. Standard LAN / Wi-Fi Hotspot gateways (192.168.1.1, 192.168.43.1, 192.168.137.1, 192.168.0.1).
    * 4. Localhost fallback (127.0.0.1:8000).
    */
   public getCandidateIps(): string[] {
@@ -159,7 +211,6 @@ export class MeshService {
     candidates.push('192.168.0.1:8000');
     candidates.push('127.0.0.1:8000');
 
-    // Filter duplicates
     return Array.from(new Set(candidates));
   }
 
@@ -167,8 +218,54 @@ export class MeshService {
    * Set a manual Commander IP address or hostname.
    */
   public setManualCommanderIp(ip: string | null): void {
-    this.manualCommanderIp = ip;
+    this.manualCommanderIp = ip ? ip.trim() : null;
     this.notifyListeners();
+  }
+
+  /**
+   * Explicitly test connectivity to a target Commander IP:port.
+   */
+  public async testDirectConnection(targetInput: string): Promise<{ success: boolean; data?: any; error?: string; latencyMs?: number }> {
+    const norm = this.normalizeTarget(targetInput);
+    const startTime = Date.now();
+    this.lastProbeTime = startTime;
+    this.lastProbeTarget = `${norm.host}:${norm.port}`;
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2500);
+
+      const res = await fetch(`${norm.url}/node/status`, {
+        method: 'GET',
+        headers: { 'User-Agent': 'ResQMesh-Mobile/1.0', Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const latencyMs = Math.max(1, Date.now() - startTime);
+
+      if (res.ok) {
+        const data = await res.json();
+        this.lastProbeResult = `HTTP ${res.status} OK (${latencyMs}ms)`;
+        this.notifyListeners();
+        return { success: true, data, latencyMs };
+      } else {
+        const errStr = `HTTP ${res.status} ${res.statusText || 'Error'}`;
+        this.lastProbeResult = errStr;
+        this.notifyListeners();
+        return { success: false, error: errStr, latencyMs };
+      }
+    } catch (err: any) {
+      let errStr = err.message || 'Connection failed';
+      if (err.name === 'AbortError') {
+        errStr = 'Connection timed out (Host unreachable)';
+      } else if (errStr.includes('Network request failed')) {
+        errStr = 'Network unreachable / Connection refused (Check IP & Port 8000)';
+      }
+      this.lastProbeResult = errStr;
+      this.notifyListeners();
+      return { success: false, error: errStr, latencyMs: Date.now() - startTime };
+    }
   }
 
   /**
@@ -185,19 +282,19 @@ export class MeshService {
     this.notifyListeners();
 
     const candidates = this.getCandidateIps();
+    let lastProbeErr = 'No candidates responded';
 
     for (const candidate of candidates) {
-      const url = candidate.startsWith('http://') || candidate.startsWith('https://') ? candidate : `http://${candidate}`;
-      const cleanCandidate = candidate.replace(/^https?:\/\//, '').replace(/\/+$/, '');
-      const ipPart = cleanCandidate.split(':')[0];
-      const portPart = parseInt(cleanCandidate.split(':')[1] || '8000', 10);
+      const norm = this.normalizeTarget(candidate);
+      this.lastProbeTime = Date.now();
+      this.lastProbeTarget = `${norm.host}:${norm.port}`;
 
       try {
         const startTime = Date.now();
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-        const statusRes = await fetch(`${url}/node/status`, {
+        const statusRes = await fetch(`${norm.url}/node/status`, {
           method: 'GET',
           headers: { 'User-Agent': 'ResQMesh-Mobile/1.0', Accept: 'application/json' },
           signal: controller.signal,
@@ -207,9 +304,10 @@ export class MeshService {
         if (statusRes.ok) {
           const statusData = await statusRes.json();
           const latencyMs = Math.max(1, Date.now() - startTime);
+          this.lastProbeResult = `HTTP 200 OK (${latencyMs}ms)`;
 
           // Found Command Center node! Proceed to reciprocal handshake / registration
-          const regRes = await fetch(`${url}/peers/register`, {
+          const regRes = await fetch(`${norm.url}/peers/register`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -229,20 +327,28 @@ export class MeshService {
             const regData = await regRes.json();
             const cmdNode = regData.my_node || statusData;
 
+            const transportLabel = candidate.includes('10.0.2.2')
+              ? 'BlueStacks Virtual Bridge (HTTP/TCP)'
+              : 'LAN (HTTP/TCP)';
+
             const commanderPeer: ConnectedPeer = {
               nodeId: cmdNode.node_id || statusData.node_id || 'commander-01',
-              name: cmdNode.name || statusData.node_name || 'HQ-Command-01',
+              name: cmdNode.name || statusData.name || statusData.node_name || 'HQ-Command-Center',
               role: cmdNode.role || statusData.role || 'commander',
-              ipAddress: ipPart,
-              port: portPart,
+              ipAddress: norm.host,
+              port: norm.port,
               latencyMs,
               lastSeen: Date.now(),
-              transport: candidate.includes('10.0.2.2') ? 'BlueStacks Virtual Bridge (HTTP/TCP)' : 'LAN (HTTP/TCP)',
+              transport: transportLabel,
             };
 
             this.peers.set(commanderPeer.nodeId, commanderPeer);
             this.connectedCommander = commanderPeer;
             this.state = 'CONNECTED';
+            this.activeTransport = transportLabel;
+            this.discoveryMode = this.manualCommanderIp && this.manualCommanderIp.includes(norm.host)
+              ? 'Manual IP Pairing'
+              : 'Gateway Probing';
             this.consecutiveFailures = 0;
             this.lastHandshakeTime = Date.now();
             this.lastError = null;
@@ -253,16 +359,30 @@ export class MeshService {
             // Immediately flush pending reports
             this.syncAllPendingReports().catch(() => {});
             return true;
+          } else {
+            lastProbeErr = `Peer registration failed (HTTP ${regRes.status})`;
+            this.lastProbeResult = lastProbeErr;
           }
+        } else {
+          lastProbeErr = `Target returned HTTP ${statusRes.status}`;
+          this.lastProbeResult = lastProbeErr;
         }
       } catch (err: any) {
-        // Candidate unreachable, continue to next candidate
+        if (err.name === 'AbortError') {
+          lastProbeErr = `Timeout connecting to ${norm.host}:${norm.port}`;
+        } else {
+          lastProbeErr = `Unreachable: ${norm.host}:${norm.port} (${err.message || 'Error'})`;
+        }
+        this.lastProbeResult = lastProbeErr;
       }
     }
 
     // No candidates responded
     this.consecutiveFailures += 1;
     this.state = 'STANDALONE';
+    this.activeTransport = 'Offline Storage (SQLite)';
+    this.discoveryMode = 'Standalone Mesh';
+    this.lastError = lastProbeErr;
     this.peers.clear();
     this.connectedCommander = null;
     this.isConnecting = false;
@@ -385,6 +505,7 @@ export class MeshService {
 
           const res = await fetch(`${url}/node/status`, {
             method: 'GET',
+            headers: { 'User-Agent': 'ResQMesh-Mobile/1.0', Accept: 'application/json' },
             signal: controller.signal,
           });
           clearTimeout(timeoutId);
@@ -433,7 +554,7 @@ export class MeshService {
       try {
         listener(status);
       } catch (err) {
-        console.error('Error notifying mesh listener:', err);
+        // Safe logging
       }
     });
   }

@@ -2,7 +2,7 @@
  * ResQMesh Mobile — Detailed Mesh Diagnostics & Peer Inspector Modal.
  * 
  * Provides full situational transparency into local node identity,
- * peer connections, candidate probe list, custom Commander IP pairing,
+ * peer connections, live connection diagnostics, custom Commander IP pairing,
  * and manual sync controls.
  */
 
@@ -28,20 +28,25 @@ interface Props {
 }
 
 export default function MeshDetailModal({ visible, status, onClose }: Props) {
-  const [manualIp, setManualIp] = useState('');
+  const [manualIp, setManualIp] = useState(status.manualCommanderIp || '');
   const [isRetrying, setIsRetrying] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [testResult, setTestResult] = useState<string | null>(null);
 
   const meshService = MeshService.getInstance();
 
   const handleRetry = async () => {
     setIsRetrying(true);
+    setTestResult(null);
     try {
       const connected = await meshService.discoverAndConnect();
       if (connected) {
         Alert.alert('✓ Mesh Connected', 'Successfully discovered and registered with Command Center!');
       } else {
-        Alert.alert('Standby / Offline', 'No nearby Command Center nodes responded. Local offline mesh is active.');
+        Alert.alert(
+          'Standby / Offline',
+          `No nearby Command Center nodes responded.\n\nLast probe: ${meshService.getStatus().lastProbeResult || 'Unreachable'}\n\nLocal offline mesh is operational.`
+        );
       }
     } catch (e: any) {
       Alert.alert('Probe Notice', e.message || 'Discovery probe finished.');
@@ -50,21 +55,47 @@ export default function MeshDetailModal({ visible, status, onClose }: Props) {
     }
   };
 
-  const handleSetCustomIp = async () => {
-    if (!manualIp.trim()) {
-      Alert.alert('Invalid Address', 'Please enter a valid IP address or hostname (e.g. 192.168.1.100:8000).');
+  const handleTestAndPair = async () => {
+    const target = manualIp.trim();
+    if (!target) {
+      Alert.alert('Invalid Address', 'Please enter a valid IP address (e.g. 192.168.68.109 or 192.168.137.1:8000).');
       return;
     }
-    meshService.setManualCommanderIp(manualIp.trim());
+
     setIsRetrying(true);
+    setTestResult('Probing target...');
+
+    // 1. Direct TCP Probe to /node/status
+    const probe = await meshService.testDirectConnection(target);
+    if (!probe.success) {
+      setIsRetrying(false);
+      setTestResult(`❌ FAILED: ${probe.error}`);
+      Alert.alert(
+        'Connection Failed',
+        `Unable to reach Command Center at ${target}.\n\nReason: ${probe.error}\n\nPlease check:\n1. Windows Laptop & Phone are on the same Wi-Fi or Hotspot.\n2. Windows Command Center is running.\n3. Port 8000 is open.`
+      );
+      return;
+    }
+
+    // 2. Set manual IP and execute full reciprocal registration
+    meshService.setManualCommanderIp(target);
     const connected = await meshService.discoverAndConnect();
     setIsRetrying(false);
+
     if (connected) {
-      Alert.alert('✓ Connected to Commander', `Successfully registered with ${manualIp.trim()}`);
-      setManualIp('');
+      setTestResult(`✓ CONNECTED: ${probe.data?.name || 'Commander'} (${probe.latencyMs}ms)`);
+      Alert.alert('✓ Connected to Commander', `Successfully registered with ${target} (${probe.data?.name || 'Commander'})!`);
     } else {
-      Alert.alert('Target Unreachable', `Could not connect to ${manualIp.trim()}. Please verify host IP and port 8000.`);
+      setTestResult(`❌ Registration Failed`);
+      Alert.alert('Registration Error', `Reached ${target} but peer registration was not completed.`);
     }
+  };
+
+  const handleClearManualIp = () => {
+    meshService.setManualCommanderIp(null);
+    setManualIp('');
+    setTestResult(null);
+    Alert.alert('Reset', 'Manual Commander IP cleared. Using automatic candidate discovery.');
   };
 
   const handleForceSync = async () => {
@@ -81,7 +112,7 @@ export default function MeshDetailModal({ visible, status, onClose }: Props) {
 
   const formatTs = (ts: number | null) => {
     if (!ts) return 'None';
-    return new Date(ts).toLocaleString();
+    return new Date(ts).toLocaleTimeString();
   };
 
   return (
@@ -124,30 +155,133 @@ export default function MeshDetailModal({ visible, status, onClose }: Props) {
                   : status.state === 'STANDALONE'
                   ? 'Local offline node operational with local SQLite storage. Standing by for nearby peers.'
                   : status.state === 'CONNECTING' || status.state === 'RECONNECTING'
-                  ? 'Probing virtual gateway and local LAN interfaces...'
+                  ? 'Probing local LAN interfaces and candidates...'
                   : 'Disconnected from mesh network.'}
               </Text>
             </View>
 
-            {/* Local Node Identity */}
+            {/* Connection Diagnostics (Explicit Real-Time Debug) */}
             <View style={styles.card}>
-              <Text style={styles.cardSectionTitle}>LOCAL NODE IDENTITY</Text>
+              <Text style={styles.cardSectionTitle}>CONNECTION DIAGNOSTICS</Text>
               <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Node ID:</Text>
-                <Text style={styles.infoValueMonospace}>{status.nodeId}</Text>
-              </View>
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Node Name:</Text>
+                <Text style={styles.infoLabel}>Node:</Text>
                 <Text style={styles.infoValue}>{status.nodeName}</Text>
               </View>
               <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Role:</Text>
-                <Text style={styles.infoValue}>{status.role.toUpperCase()}</Text>
+                <Text style={styles.infoLabel}>Status:</Text>
+                <Text style={[styles.infoValue, { color: status.state === 'CONNECTED' ? '#10B981' : '#F59E0B' }]}>
+                  {status.state}
+                </Text>
               </View>
               <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Local Virtual IP:</Text>
-                <Text style={styles.infoValueMonospace}>{status.localIp}</Text>
+                <Text style={styles.infoLabel}>Command Center:</Text>
+                <Text style={styles.infoValue}>
+                  {status.connectedCommander ? status.connectedCommander.name : 'None (Searching)'}
+                </Text>
               </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Target:</Text>
+                <Text style={styles.infoValueMonospace}>
+                  {status.connectedCommander
+                    ? `${status.connectedCommander.ipAddress}:${status.connectedCommander.port}`
+                    : status.lastProbeTarget || 'None'}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Transport:</Text>
+                <Text style={styles.infoValue}>{status.activeTransport || 'HTTP/TCP'}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Discovery:</Text>
+                <Text style={styles.infoValue}>{status.discoveryMode || 'Standing By'}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Last Probe:</Text>
+                <Text style={styles.infoValue}>{formatTs(status.lastProbeTime)}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Last Result:</Text>
+                <Text
+                  style={[
+                    styles.infoValue,
+                    {
+                      color:
+                        status.lastProbeResult?.includes('200') || status.lastProbeResult?.includes('OK')
+                          ? '#10B981'
+                          : '#F87171',
+                      fontSize: 11,
+                    },
+                  ]}
+                  numberOfLines={1}
+                >
+                  {status.lastProbeResult || 'None'}
+                </Text>
+              </View>
+              {status.lastError ? (
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Last Error:</Text>
+                  <Text style={[styles.infoValue, { color: '#EF4444', fontSize: 11 }]} numberOfLines={2}>
+                    {status.lastError}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Heartbeat:</Text>
+                <Text style={styles.infoValue}>
+                  {status.state === 'CONNECTED' && status.connectedCommander
+                    ? `Healthy (${status.connectedCommander.latencyMs} ms)`
+                    : 'Inactive'}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Last Successful Sync:</Text>
+                <Text style={styles.infoValue}>{formatTs(status.lastSyncTime)}</Text>
+              </View>
+            </View>
+
+            {/* Custom Commander IP Pair */}
+            <View style={styles.card}>
+              <Text style={styles.cardSectionTitle}>MANUAL COMMANDER IP PAIRING</Text>
+              <Text style={styles.pairHelpText}>
+                Enter the Windows Command Center LAN or Hotspot IPv4 address (e.g. 192.168.68.109 or 192.168.137.1):
+              </Text>
+              <View style={styles.inputRow}>
+                <TextInput
+                  style={styles.ipInput}
+                  placeholder="e.g. 192.168.68.109:8000"
+                  placeholderTextColor="#64748B"
+                  value={manualIp}
+                  onChangeText={setManualIp}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                <TouchableOpacity
+                  style={styles.pairBtn}
+                  onPress={handleTestAndPair}
+                  disabled={isRetrying}
+                >
+                  <Text style={styles.pairBtnText}>Pair</Text>
+                </TouchableOpacity>
+                {status.manualCommanderIp ? (
+                  <TouchableOpacity
+                    style={styles.clearBtn}
+                    onPress={handleClearManualIp}
+                    disabled={isRetrying}
+                  >
+                    <Text style={styles.clearBtnText}>✕</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {testResult ? (
+                <Text
+                  style={[
+                    styles.testResultText,
+                    { color: testResult.startsWith('✓') ? '#10B981' : testResult.startsWith('❌') ? '#EF4444' : '#38BDF8' },
+                  ]}
+                >
+                  {testResult}
+                </Text>
+              ) : null}
             </View>
 
             {/* Connected Commander & Peers */}
@@ -173,45 +307,6 @@ export default function MeshDetailModal({ visible, status, onClose }: Props) {
                   No active peers discovered yet. Reports are safely persisted offline in SQLite.
                 </Text>
               )}
-            </View>
-
-            {/* Telemetry & Sync Stats */}
-            <View style={styles.card}>
-              <Text style={styles.cardSectionTitle}>TELEMETRY & SYNC METRICS</Text>
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Last Handshake:</Text>
-                <Text style={styles.infoValue}>{formatTs(status.lastHandshakeTime)}</Text>
-              </View>
-              <View style={styles.infoRow}>
-                <Text style={styles.infoLabel}>Last Sync:</Text>
-                <Text style={styles.infoValue}>{formatTs(status.lastSyncTime)}</Text>
-              </View>
-            </View>
-
-            {/* Custom Commander IP Pair */}
-            <View style={styles.card}>
-              <Text style={styles.cardSectionTitle}>MANUAL COMMANDER IP PAIRING</Text>
-              <Text style={styles.pairHelpText}>
-                In complex LANs or virtual subnets (e.g. BlueStacks NAT), enter your Windows Commander IP:
-              </Text>
-              <View style={styles.inputRow}>
-                <TextInput
-                  style={styles.ipInput}
-                  placeholder="e.g. 192.168.1.100:8000 or 10.0.2.2:8000"
-                  placeholderTextColor="#64748B"
-                  value={manualIp}
-                  onChangeText={setManualIp}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                />
-                <TouchableOpacity
-                  style={styles.pairBtn}
-                  onPress={handleSetCustomIp}
-                  disabled={isRetrying}
-                >
-                  <Text style={styles.pairBtnText}>Pair</Text>
-                </TouchableOpacity>
-              </View>
             </View>
           </ScrollView>
 
@@ -328,20 +423,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: 4,
+    paddingVertical: 3,
   },
   infoLabel: {
     color: '#94A3B8',
-    fontSize: 12,
+    fontSize: 11,
   },
   infoValue: {
     color: '#F8FAFC',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '600',
   },
   infoValueMonospace: {
     color: '#38BDF8',
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   peerItem: {
@@ -414,6 +509,23 @@ const styles = StyleSheet.create({
     color: '#FFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  clearBtn: {
+    backgroundColor: '#334155',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 8,
+    marginLeft: 4,
+  },
+  clearBtnText: {
+    color: '#94A3B8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  testResultText: {
+    fontSize: 11,
+    marginTop: 6,
+    fontWeight: '600',
   },
   footer: {
     flexDirection: 'row',
