@@ -73,7 +73,11 @@ class NodeManager:
                     self.role = data.get("role", "responder")
                     self.api_port = data.get("api_port", 8000)
                     self.is_configured = data.get("is_configured", True)
-                    self.keypair = DeviceKeyPair()  # Ephemeral or persistent keypair
+                    priv_b64 = data.get("private_key")
+                    if priv_b64:
+                        self.keypair = DeviceKeyPair.from_private_key_b64(priv_b64)
+                    else:
+                        self.keypair = DeviceKeyPair()
                     logger.info(f"Loaded existing node identity: {self.node_name} ({self.node_id})")
                     return
             except Exception as e:
@@ -88,17 +92,27 @@ class NodeManager:
 
     def setup_node(self, name: str, role: str, port: int = 8000) -> dict:
         """First-run setup: configure node name and role (responder / commander)."""
-        self.node_name = name.strip() or self.node_name
+        clean_name = name.strip()
+        if not clean_name:
+            raise ValueError("Node name cannot be empty.")
+        if len(clean_name) > 64:
+            clean_name = clean_name[:64]
+
+        self.node_name = clean_name
         self.role = role.lower() if role.lower() in ["responder", "commander", "relay"] else "responder"
         self.api_port = port
         self.is_configured = True
+
+        if not self.keypair:
+            self.keypair = DeviceKeyPair()
 
         config_data = {
             "node_id": self.node_id,
             "node_name": self.node_name,
             "role": self.role,
             "api_port": self.api_port,
-            "public_key": self.keypair.get_public_key_b64() if self.keypair else "",
+            "public_key": self.keypair.get_public_key_b64(),
+            "private_key": self.keypair.get_private_key_b64(),
             "is_configured": True,
             "updated_at": time.time(),
         }
@@ -110,7 +124,15 @@ class NodeManager:
         except Exception as e:
             logger.error(f"Failed to write node config: {e}")
 
-        return config_data
+        return {
+            "node_id": self.node_id,
+            "node_name": self.node_name,
+            "role": self.role,
+            "api_port": self.api_port,
+            "public_key": self.keypair.get_public_key_b64(),
+            "is_configured": True,
+            "updated_at": config_data["updated_at"],
+        }
 
     def get_status(self) -> dict:
         """Return operational status of this peer node."""
@@ -134,7 +156,8 @@ class NodeManager:
         if not peer_id or peer_id == self.node_id:
             return  # Do not register self
 
-        peer_data["last_seen"] = time.time()
+        if "last_seen" not in peer_data:
+            peer_data["last_seen"] = time.time()
         peer_data["status"] = "online"
         self._active_peers[peer_id] = peer_data
 

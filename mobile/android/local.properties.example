@@ -1,0 +1,6 @@
+# Android SDK Location Configuration for ResQMesh Mobile App
+# Copy this file to local.properties and update sdk.dir to point to your local Android SDK installation path.
+# Windows Example:
+# sdk.dir=C\:\\Users\\YOUR_USERNAME\\AppData\\Local\\Android\\Sdk
+# macOS/Linux Example:
+# sdk.dir=/Users/YOUR_USERNAME/Library/Android/sdk

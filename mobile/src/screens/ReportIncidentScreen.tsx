@@ -15,8 +15,7 @@ import {
   Alert,
   StatusBar,
 } from 'react-native';
-import 'react-native-get-random-values';
-import {v4 as uuidv4} from 'uuid';
+import {generateUniqueId} from '../utils/id';
 import db from '../db/sqlite';
 import {DEVICE_ID, USER_ID} from '../constants/device';
 
@@ -72,22 +71,33 @@ export default function ReportIncidentScreen({navigation}: Props) {
 
     setLoading(true);
     try {
-      const reportId = uuidv4();
+      // 1. Ensure local SQLite storage and tables are ready
+      await db.init();
+
+      // 2. Generate report ID
+      const reportId = generateUniqueId('report');
+
+      // 3. Safely parse coordinates
+      const parsedLat = parseFloat(latitude);
+      const parsedLng = parseFloat(longitude);
+
+      // 4. Save report locally to SQLite database
       await db.reports.create({
         report_id: reportId,
         device_id: DEVICE_ID,
         user_id: USER_ID,
-        latitude: parseFloat(latitude) || 0.0,
-        longitude: parseFloat(longitude) || 0.0,
+        latitude: !isNaN(parsedLat) ? parsedLat : 0.0,
+        longitude: !isNaN(parsedLng) ? parsedLng : 0.0,
         description: description.trim(),
         category,
         attachments: null,
         device_clock: Date.now(),
       });
 
+      // 5. Display clear offline persistence confirmation
       Alert.alert(
-        'Report Submitted',
-        'Your incident report has been saved locally and will sync when peers are available.',
+        '✅ Report Saved Offline',
+        'Your incident report has been saved locally to device storage and queued for peer sync.',
         [
           {
             text: 'OK',
@@ -95,15 +105,17 @@ export default function ReportIncidentScreen({navigation}: Props) {
               setDescription('');
               setCategory('general');
               setSeverity('medium');
-              setLatitude('');
-              setLongitude('');
               navigation.navigate('IncidentList');
             },
           },
         ],
       );
-    } catch (error) {
-      Alert.alert('Error', 'Failed to save report. Please try again.');
+    } catch (error: any) {
+      console.error('Failed to save report to local SQLite:', error);
+      Alert.alert(
+        'Unable to Save Report',
+        `Could not save incident locally: ${error?.message || 'Database error'}. Please try again.`,
+      );
     } finally {
       setLoading(false);
     }

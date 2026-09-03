@@ -78,15 +78,71 @@ CREATE TABLE IF NOT EXISTS sync_acks (
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 async function init(): Promise<void> {
-  if (database) {
-    return;
+  if (!database) {
+    database = await SQLite.openDatabase({ name: DB_NAME, location: 'default' });
   }
-  database = await SQLite.openDatabase({ name: DB_NAME, location: 'default' });
-  await database.transaction((tx: Transaction) => {
-    DDL.trim().split(';').filter(s => s.trim()).forEach(stmt => {
-      tx.executeSql(stmt + ';');
-    });
-  });
+
+  const ddlStatements = [
+    `CREATE TABLE IF NOT EXISTS operational_incidents (
+      incident_id   TEXT PRIMARY KEY,
+      title         TEXT NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'open',
+      severity      TEXT NOT NULL DEFAULT 'medium',
+      category      TEXT NOT NULL DEFAULT 'general',
+      latitude      REAL NOT NULL DEFAULT 0.0,
+      longitude     REAL NOT NULL DEFAULT 0.0,
+      summary       TEXT,
+      created_at    TEXT NOT NULL,
+      updated_at    TEXT NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS reports (
+      report_id     TEXT PRIMARY KEY,
+      incident_id   TEXT REFERENCES operational_incidents(incident_id),
+      device_id     TEXT NOT NULL,
+      user_id       TEXT NOT NULL,
+      timestamp     TEXT NOT NULL,
+      latitude      REAL NOT NULL DEFAULT 0.0,
+      longitude     REAL NOT NULL DEFAULT 0.0,
+      description   TEXT NOT NULL,
+      category      TEXT NOT NULL DEFAULT 'general',
+      attachments   TEXT,
+      device_clock  INTEGER NOT NULL DEFAULT 0
+    );`,
+    `CREATE TABLE IF NOT EXISTS chat_messages (
+      message_id        TEXT PRIMARY KEY,
+      incident_id       TEXT REFERENCES operational_incidents(incident_id),
+      sender_device_id  TEXT NOT NULL,
+      sender_user_id    TEXT NOT NULL,
+      text              TEXT NOT NULL,
+      timestamp         TEXT NOT NULL,
+      device_clock      INTEGER NOT NULL DEFAULT 0
+    );`,
+    `CREATE TABLE IF NOT EXISTS resource_requests (
+      resource_id   TEXT PRIMARY KEY,
+      incident_id   TEXT REFERENCES operational_incidents(incident_id),
+      requester_id  TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      quantity      INTEGER NOT NULL DEFAULT 1,
+      urgency       TEXT NOT NULL DEFAULT 'medium',
+      status        TEXT NOT NULL DEFAULT 'pending',
+      timestamp     TEXT NOT NULL
+    );`,
+    `CREATE TABLE IF NOT EXISTS sync_acks (
+      ack_id                TEXT PRIMARY KEY,
+      source_device         TEXT NOT NULL,
+      target_device         TEXT NOT NULL,
+      last_sync_timestamp   TEXT NOT NULL,
+      device_clock          INTEGER NOT NULL DEFAULT 0
+    );`,
+  ];
+
+  for (const stmt of ddlStatements) {
+    try {
+      await database.executeSql(stmt, []);
+    } catch (err) {
+      console.warn('DDL statement execution warning:', err, stmt);
+    }
+  }
 }
 
 function getDb(): SQLiteDatabase {
@@ -112,25 +168,25 @@ type CreateReportInput = {
 };
 
 async function createReport(input: CreateReportInput): Promise<void> {
-  const db = getDb();
+  const dbInstance = getDb();
   const now = new Date().toISOString();
-  await db.executeSql(
+  await dbInstance.executeSql(
     `INSERT INTO reports
      (report_id, incident_id, device_id, user_id, timestamp, latitude, longitude,
       description, category, attachments, device_clock)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      input.report_id,
+      input.report_id || `report-${Date.now()}`,
       input.incident_id ?? null,
-      input.device_id,
-      input.user_id,
+      input.device_id || 'unknown-device',
+      input.user_id || 'unknown-user',
       now,
-      input.latitude,
-      input.longitude,
-      input.description,
-      input.category,
+      typeof input.latitude === 'number' && !isNaN(input.latitude) ? input.latitude : 0.0,
+      typeof input.longitude === 'number' && !isNaN(input.longitude) ? input.longitude : 0.0,
+      input.description || '',
+      input.category || 'general',
       input.attachments ?? null,
-      input.device_clock,
+      typeof input.device_clock === 'number' ? input.device_clock : Date.now(),
     ],
   );
 }

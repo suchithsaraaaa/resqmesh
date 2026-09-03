@@ -40,6 +40,7 @@ export const App: React.FC = () => {
 
   // Mesh Network & Sync State
   const [peers, setPeers] = useState<PeerNode[]>([]);
+  const [meshState, setMeshState] = useState<string>('INITIALIZING');
   const [outboxCount, setOutboxCount] = useState<number>(0);
   const [syncStatus, setSyncStatus] = useState<string>('synchronized');
 
@@ -106,18 +107,25 @@ export const App: React.FC = () => {
 
   // Determine port from Electron preload if available
   useEffect(() => {
-    const electronApi = (window as any).electronAPI;
-    if (electronApi && typeof electronApi.getServerPort === 'function') {
-      electronApi.getServerPort().then((port: number) => {
+    const api = (window as any).resqmeshAPI || (window as any).electronAPI;
+    if (api && typeof api.getNodePort === 'function') {
+      api.getNodePort().then((port: number) => {
+        if (port) setApiPort(port);
+      }).catch(() => {});
+    } else if (api && typeof api.getServerPort === 'function') {
+      api.getServerPort().then((port: number) => {
         if (port) setApiPort(port);
       }).catch(() => {});
     }
   }, []);
 
-  // Fetch node status
+  // Fetch node status with timeout protection
   const fetchNodeStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${getApiUrl()}/node/status`);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      const res = await fetch(`${getApiUrl()}/node/status`, { signal: controller.signal });
+      clearTimeout(timeout);
       if (res.ok) {
         const data = await res.json();
         setNodeId(data.node_id || '');
@@ -132,6 +140,19 @@ export const App: React.FC = () => {
           data.name !== 'ResQMesh-Node';
 
         if (!isNodeConfigured || !hasCustomName) {
+          const offlineData = localStorage.getItem('resqmesh_offline_node');
+          if (offlineData) {
+            try {
+              const parsed = JSON.parse(offlineData);
+              if (parsed.name) {
+                setNodeName(parsed.name);
+                setNodeRole(parsed.role || 'responder');
+                setIsConfigured(true);
+                setShowConfigModal(false);
+                return;
+              }
+            } catch {}
+          }
           setIsConfigured(false);
           setShowConfigModal(true);
         } else {
@@ -142,6 +163,22 @@ export const App: React.FC = () => {
       // Backend starting up or unreachable
     }
   }, [getApiUrl]);
+
+  // Fetch live mesh network status
+  const fetchMeshStatus = useCallback(async () => {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`${getApiUrl()}/node/mesh-status`, { signal: controller.signal });
+      clearTimeout(timeout);
+      if (res.ok) {
+        const data = await res.json();
+        setMeshState(data.state || (peers.length > 0 ? 'CONNECTED' : 'DEGRADED'));
+      }
+    } catch {
+      setMeshState(peers.length > 0 ? 'CONNECTED' : 'DEGRADED');
+    }
+  }, [getApiUrl, peers.length]);
 
   // Fetch active peers & track join notifications
   const fetchPeers = useCallback(async () => {
@@ -393,6 +430,7 @@ export const App: React.FC = () => {
   // Periodic polling & 10-second automatic mesh sync loop
   useEffect(() => {
     fetchNodeStatus();
+    fetchMeshStatus();
     fetchPeers();
     fetchSyncMetrics();
     fetchClusters();
@@ -402,6 +440,8 @@ export const App: React.FC = () => {
 
     // 3-second rapid UI refresh interval
     const refreshInterval = setInterval(() => {
+      fetchNodeStatus();
+      fetchMeshStatus();
       fetchPeers();
       fetchSyncMetrics();
       fetchClusters();
@@ -413,11 +453,15 @@ export const App: React.FC = () => {
     // 10-second automatic distributed delta sync interval
     const syncInterval = setInterval(async () => {
       try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 4000);
         await fetch(`${getApiUrl()}/sync/vector`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ vector: {} }),
+          signal: controller.signal,
         });
+        clearTimeout(timeout);
         fetchSyncMetrics();
         fetchClusters();
         fetchIncidents();
@@ -432,24 +476,53 @@ export const App: React.FC = () => {
       clearInterval(refreshInterval);
       clearInterval(syncInterval);
     };
-  }, [fetchNodeStatus, fetchPeers, fetchSyncMetrics, fetchClusters, fetchIncidents, fetchResources, fetchEventsFeed, getApiUrl]);
+  }, [fetchNodeStatus, fetchMeshStatus, fetchPeers, fetchSyncMetrics, fetchClusters, fetchIncidents, fetchResources, fetchEventsFeed, getApiUrl]);
 
-  // Save Node Setup
+  // Save Node Setup with AbortController timeout protection
   const handleSaveNodeConfig = async (name: string, role: string) => {
-    const res = await fetch(`${getApiUrl()}/node/setup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, role }),
-    });
-    if (!res.ok) {
-      throw new Error('Failed to update node setup.');
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 4500);
+    try {
+      const res = await fetch(`${getApiUrl()}/node/setup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, role }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || `Server returned error (${res.status})`);
+      }
+      const data = await res.json();
+      setNodeId(data.node_id);
+      setNodeName(data.name);
+      setNodeRole(data.role);
+      setIsConfigured(true);
+      setShowConfigModal(false);
+      localStorage.setItem('resqmesh_offline_node', JSON.stringify({ name: data.name, role: data.role }));
+      fetchMeshStatus();
+      fetchPeers();
+    } catch (err: any) {
+      clearTimeout(timeout);
+      throw new Error(err.name === 'AbortError' ? 'Connection to local mesh daemon timed out.' : (err.message || 'Failed to save node configuration.'));
     }
-    const data = await res.json();
-    setNodeId(data.node_id);
-    setNodeName(data.name);
-    setNodeRole(data.role);
+  };
+
+  // Continue in Offline Standalone Mode
+  const handleContinueOffline = (name: string, role: string) => {
+    setNodeName(name);
+    setNodeRole(role);
     setIsConfigured(true);
     setShowConfigModal(false);
+    setMeshState('OFFLINE');
+    localStorage.setItem('resqmesh_offline_node', JSON.stringify({ name, role }));
+    TacticalEventBus.publish({
+      type: 'MESH_STANDALONE_INIT',
+      severity: 'INFO',
+      title: 'Command Center Initialized in Offline Standalone Mode',
+      description: `Laptop operating locally as ${role === 'commander' ? 'Commander' : 'Field Responder'} "${name}". Mesh standby for nearby peers.`,
+    });
   };
 
   // Trigger Force Sync
@@ -873,6 +946,7 @@ export const App: React.FC = () => {
           nodeName={nodeName}
           nodeRole={nodeRole}
           peerCount={peers.length}
+          meshState={meshState}
           unreadNotificationCount={notifications.length}
           onOpenNotifications={() => setShowNotificationsDrawer(!showNotificationsDrawer)}
           onOpenBroadcastModal={() => setShowCreateModal(true)}
@@ -1281,6 +1355,7 @@ export const App: React.FC = () => {
         canClose={isConfigured}
         onClose={() => setShowConfigModal(false)}
         onSave={handleSaveNodeConfig}
+        onContinueOffline={handleContinueOffline}
       />
 
       {/* Peer Mesh Topology Modal */}

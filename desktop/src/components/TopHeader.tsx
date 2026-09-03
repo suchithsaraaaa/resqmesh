@@ -7,6 +7,7 @@ interface TopHeaderProps {
   nodeName: string;
   nodeRole: string;
   peerCount: number;
+  meshState?: 'NOT_INITIALIZED' | 'INITIALIZING' | 'CONNECTED' | 'DEGRADED' | 'DISCONNECTED' | 'OFFLINE' | 'FAILED' | string;
   unreadNotificationCount: number;
   onOpenNotifications: () => void;
   onOpenBroadcastModal: () => void;
@@ -19,6 +20,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   nodeName,
   nodeRole,
   peerCount,
+  meshState = 'DEGRADED',
   unreadNotificationCount,
   onOpenNotifications,
   onOpenBroadcastModal,
@@ -68,6 +70,54 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   };
 
   const { title, subtitle } = getPageTitle(activeTab);
+
+  const getMeshBadgeStyle = () => {
+    if (peerCount > 0 || meshState === 'CONNECTED') {
+      return {
+        bg: 'rgba(56, 189, 248, 0.15)',
+        border: '#38bdf8',
+        color: '#38bdf8',
+        text: `Mesh: ${peerCount} Connected`,
+        icon: '🌐',
+      };
+    }
+    if (meshState === 'INITIALIZING') {
+      return {
+        bg: 'rgba(245, 158, 11, 0.15)',
+        border: '#f59e0b',
+        color: '#fbbf24',
+        text: 'Mesh: Initializing...',
+        icon: '⏳',
+      };
+    }
+    if (meshState === 'OFFLINE') {
+      return {
+        bg: 'rgba(100, 116, 139, 0.15)',
+        border: '#64748b',
+        color: '#94a3b8',
+        text: 'Mesh: Offline Mode',
+        icon: '⚡',
+      };
+    }
+    if (meshState === 'FAILED') {
+      return {
+        bg: 'rgba(239, 68, 68, 0.15)',
+        border: '#ef4444',
+        color: '#f87171',
+        text: 'Mesh: Unavailable',
+        icon: '⚠️',
+      };
+    }
+    return {
+      bg: 'rgba(255, 255, 255, 0.04)',
+      border: colors.borderSubtle,
+      color: colors.textMuted,
+      text: 'Mesh: Standalone (0 Peers)',
+      icon: '📡',
+    };
+  };
+
+  const meshBadge = getMeshBadgeStyle();
 
   return (
     <header
@@ -170,25 +220,25 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <button
           type="button"
           onClick={onOpenPeersModal}
-          title="Inspect Connected Peer Nodes"
+          title="Inspect Connected Peer Nodes & Mesh Status"
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
             padding: '5px 11px',
             borderRadius: radii.sm,
-            background: peerCount > 0 ? 'rgba(56, 189, 248, 0.12)' : 'rgba(255, 255, 255, 0.03)',
-            border: `1px solid ${peerCount > 0 ? colors.borderFocus : colors.borderSubtle}`,
+            background: meshBadge.bg,
+            border: `1px solid ${meshBadge.border}`,
             fontSize: '0.74rem',
             fontFamily: fonts.sans,
-            color: peerCount > 0 ? colors.accentElectric : colors.textMuted,
+            color: meshBadge.color,
             cursor: 'pointer',
             fontWeight: '600',
             transition: 'all 0.15s ease',
           }}
         >
-          <span>📡</span>
-          <span>{peerCount > 0 ? `Mesh: ${peerCount} Connected` : 'Mesh: Local Mode'}</span>
+          <span>{meshBadge.icon}</span>
+          <span>{meshBadge.text}</span>
         </button>
 
         {/* Digital Clock */}

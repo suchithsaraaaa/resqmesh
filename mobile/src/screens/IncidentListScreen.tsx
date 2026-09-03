@@ -68,24 +68,27 @@ export default function IncidentListScreen({navigation}: Props) {
     }
   };
 
-  const renderItem = ({item}: {item: any}) => (
-    <TouchableOpacity style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.categoryBadge}>
-          <Text style={styles.categoryIcon}>
-            {CATEGORY_ICONS[item.category] ?? '⚠️'}
-          </Text>
-          <Text style={styles.categoryText}>
-            {(item.category ?? 'general').toUpperCase()}
-          </Text>
+  const renderItem = ({item}: {item: any}) => {
+    const cat = item?.category ?? 'general';
+    const sev = item?.severity ?? 'medium';
+    return (
+      <TouchableOpacity style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.categoryBadge}>
+            <Text style={styles.categoryIcon}>
+              {CATEGORY_ICONS[cat] ?? '⚠️'}
+            </Text>
+            <Text style={styles.categoryText}>
+              {cat.toUpperCase()}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.severityDot,
+              {backgroundColor: SEVERITY_COLORS[sev] ?? '#FF9800'},
+            ]}
+          />
         </View>
-        <View
-          style={[
-            styles.severityDot,
-            {backgroundColor: SEVERITY_COLORS[item.severity] ?? '#FF9800'},
-          ]}
-        />
-      </View>
 
       <Text style={styles.description} numberOfLines={3}>
         {item.description}
@@ -113,6 +116,7 @@ export default function IncidentListScreen({navigation}: Props) {
       )}
     </TouchableOpacity>
   );
+};
 
   return (
     <View style={styles.container}>

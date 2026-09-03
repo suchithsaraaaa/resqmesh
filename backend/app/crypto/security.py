@@ -27,6 +27,28 @@ class DeviceKeyPair:
     def get_public_key_b64(self) -> str:
         return base64.b64encode(self.get_public_key_bytes()).decode("utf-8")
 
+    def get_private_key_bytes(self) -> bytes:
+        from cryptography.hazmat.primitives import serialization
+        return self._private_key.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+
+    def get_private_key_b64(self) -> str:
+        return base64.b64encode(self.get_private_key_bytes()).decode("utf-8")
+
+    @classmethod
+    def from_private_key_b64(cls, priv_b64: str) -> "DeviceKeyPair":
+        """Recreate DeviceKeyPair from base64 raw private key bytes."""
+        try:
+            priv_bytes = base64.b64decode(priv_b64)
+            priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
+            return cls(private_key=priv_key)
+        except Exception as e:
+            logger.warning(f"Failed to deserialize private key: {e}. Generating new key.")
+            return cls()
+
     def sign(self, data: bytes) -> str:
         """Sign binary payload and return base64-encoded signature."""
         sig = self._private_key.sign(data)

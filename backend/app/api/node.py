@@ -85,6 +85,29 @@ def get_local_node_status():
     return node_manager.get_status()
 
 
+@router.get("/node/mesh-status")
+def get_mesh_network_status():
+    """Return live operational mesh state, network interfaces, and peer metrics."""
+    try:
+        from backend.app.network.discovery import DiscoveryEngine
+    except ImportError:
+        from app.network.discovery import DiscoveryEngine
+
+    return DiscoveryEngine.get_instance().get_mesh_status()
+
+
+@router.post("/node/mesh-restart")
+@router.post("/node/mesh-retry")
+def retry_mesh_network_discovery():
+    """Restart local peer discovery and re-probe network interfaces."""
+    try:
+        from backend.app.network.discovery import DiscoveryEngine
+    except ImportError:
+        from app.network.discovery import DiscoveryEngine
+
+    return DiscoveryEngine.get_instance().restart()
+
+
 @router.post("/node/setup")
 def setup_local_node(setup_in: NodeSetupRequest, db: Session = Depends(get_db)):
     """First-run onboarding: configure node name and role (responder vs commander)."""
@@ -111,6 +134,17 @@ def setup_local_node(setup_in: NodeSetupRequest, db: Session = Depends(get_db)):
         local_record.role = result["role"]
         local_record.api_port = result["api_port"]
     db.commit()
+
+    # Dynamically update Discovery Engine beacons
+    try:
+        from backend.app.network.discovery import DiscoveryEngine
+        DiscoveryEngine.get_instance().update_node_info(
+            name=result["node_name"],
+            role=result["role"],
+            port=result["api_port"],
+        )
+    except Exception as e:
+        logger.debug(f"Discovery update note: {e}")
 
     return result
 
