@@ -1,7 +1,7 @@
 {
   "name": "resqmesh-desktop",
   "productName": "ResQMesh AI",
-  "version": "1.0.32",
+  "version": "1.0.33",
   "description": "Offline Emergency Response Platform with Distributed Mesh Networking & AI Decision Support",
   "author": "ResQMesh AI Team",
   "main": "electron/main.js",
